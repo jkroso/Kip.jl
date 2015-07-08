@@ -1,0 +1,10 @@
+{
+  "production": {
+    "SemverQuery": "http://github.com/jkroso/SemverQuery.jl/tarball/c4b9e56",
+    "prospects": "http://github.com/jkroso/prospects/tarball/1eac352",
+    "parse-json": "http://github.com/jkroso/parse-json/tarball/0.1.0"
+  },
+  "development": {
+    "jest": "http://github.com/jkroso/Jest.jl/tarball/df8f756"
+  }
+}
