@@ -2,6 +2,8 @@
 @require "parse-json" parse => parseJSON
 @require "prospects" mapcat get_in
 
+const gh_shorthand = r"^([\w-.]+)/([\w-.]+)(?:@([^:]+))?(?::(.+))?$"
+const relative_path = r"^\.{1,2}([^.]|$)"
 const types = ["jl" => MIME("application/julia")]
 
 mime_type(name) = types[split(name, '.')[end]]
@@ -13,14 +15,29 @@ mime_type(name) = types[split(name, '.')[end]]
 function install(name::String)
   dir = dirname(name)
   for ref in dependencies(name)
-    url,path = resolve(ref)
-    cached_name = cache(url)
-    link_name = joinpath(dir, "dependencies", ref)
-    mkpath(dirname(link_name))
-    islink(link_name) && rm(link_name)
-    symlink(cached_name, link_name)
-    install(joinpath(cached_name, isempty(path) ? "index.jl" : path))
+    if ismatch(relative_path, ref)
+      joinpath(dir, ref) |> realpath
+    else
+      url,path = resolve(ref)
+      cached_name = cache(url)
+      link_name = joinpath(dir, "dependencies", ref)
+      mkpath(dirname(link_name))
+      islink(link_name) && rm(link_name)
+      symlink(cached_name, link_name)
+      isempty(path) ? cached_name : joinpath(cached_name, path)
+    end |> complete |> install
   end
+end
+
+##
+# Try some sensible defaults if `path` doesn't already refer to
+# a file
+#
+function complete(path::String)
+  for p in (path, path * ".jl", joinpath(path, "index.jl"))
+    isfile(p) && return p
+  end
+  error("$path can not be completed to a file")
 end
 
 test("install") do
@@ -74,8 +91,6 @@ requires(e::Expr) = begin
 end
 
 @test dependencies(pwd() * "/index.jl") == {"SemverQuery","parse-json","prospects"}
-
-const gh_shorthand = r"^([\w-.]+)/([\w-.]+)(?:@([^:]+))?(?::(.+))?$"
 
 function resolve(dep::String)
   ismatch(gh_shorthand, dep) && return resolve_gh(dep)
