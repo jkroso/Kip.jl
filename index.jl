@@ -76,21 +76,20 @@ end
 #
 dependencies(path::String) = dependencies(mime_type(path), readall(path), path)
 dependencies(::MIME"application/julia", src::String, name::String) = begin
-  ast = macroexpand(parse("begin\n$src\nend"))
-  unique(requires(ast))
+  unique(requires(parse("begin\n$src\nend")))
 end
 
 requires(e) = ()
 requires(e::Expr) = begin
   args = e.args
-  if e.head ≡ :call && length(args) ≡ 2 && args[1] == Expr(:., Requirer, QuoteNode(:require))
-    (args[2],)
+  if e.head ≡ :macrocall && args[1] == symbol("@require")
+    tuple(args[2])
   else
     mapcat(requires, args)
   end
 end
 
-@test dependencies(pwd() * "/index.jl") == {"SemverQuery","parse-json","prospects"}
+@test dependencies("index.jl") == {"SemverQuery","parse-json","prospects"}
 
 function resolve(dep::String)
   ismatch(gh_shorthand, dep) && return resolve_gh(dep)
