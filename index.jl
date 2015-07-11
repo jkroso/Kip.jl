@@ -27,6 +27,11 @@ function install(name::String)
       isempty(path) ? cached_name : joinpath(cached_name, path)
     end |> complete |> install
   end
+  # Run Julia's conventional install hook
+  deps = joinpath(dir, "deps")
+  isdir(deps) && cd(deps) do
+    run(`julia build.jl`)
+  end
 end
 
 ##
