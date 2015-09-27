@@ -4,7 +4,7 @@
 
 const gh_shorthand = r"^([\w-.]+)/([\w-.]+)(?:@([^:]+))?(?::(.+))?$"
 const relative_path = r"^\.{1,2}([^.]|$)"
-const types = ["jl" => MIME("application/julia")]
+const types = Dict("jl" => MIME("application/julia"))
 
 mime_type(name) = types[split(name, '.')[end]]
 
@@ -12,7 +12,7 @@ mime_type(name) = types[split(name, '.')[end]]
 # Install all dependencies of a module recursively and symlink
 # them into a local dependencies folder
 #
-function install(name::String)
+function install(name::AbstractString)
   dir = dirname(name)
   for ref in dependencies(name)
     if ismatch(relative_path, ref)
@@ -32,13 +32,14 @@ function install(name::String)
   isdir(deps) && cd(deps) do
     run(`julia build.jl`)
   end
+  nothing
 end
 
 ##
 # Try some sensible defaults if `path` doesn't already refer to
 # a file
 #
-function complete(path::String)
+function complete(path::AbstractString)
   for p in (path, path * ".jl", joinpath(path, "index.jl"))
     isfile(p) && return p
   end
@@ -51,13 +52,13 @@ test("install") do
 end
 
 const cache_dir = joinpath(homedir(), ".julia", "kip")
-const cached = Set{String}()
+const cached = Set{AbstractString}()
 
 ##
 # Translate a `url` into a connonacal local file system path
 # and if it has not yet been installed, download it
 #
-function cache(url::String)
+function cache(url::AbstractString)
   name = joinpath(cache_dir, replace(url, r"^.*://", ""))
   name in cached && return name
   if !ispath(name)
@@ -79,8 +80,8 @@ end
 ##
 # Find the dependencies of a module
 #
-dependencies(path::String) = dependencies(mime_type(path), readall(path), path)
-dependencies(::MIME"application/julia", src::String, name::String) = begin
+dependencies(path::AbstractString) = dependencies(mime_type(path), readall(path), path)
+dependencies(::MIME"application/julia", src::AbstractString, name::AbstractString) = begin
   unique(requires(parse("begin\n$src\nend")))
 end
 
@@ -94,14 +95,14 @@ requires(e::Expr) = begin
   end
 end
 
-@test dependencies("index.jl") == {"SemverQuery","parse-json","prospects"}
+@test dependencies("index.jl") == ["SemverQuery","parse-json","prospects"]
 
-function resolve(dep::String)
+function resolve(dep::AbstractString)
   ismatch(gh_shorthand, dep) && return resolve_gh(dep)
   error("unable to resolve '$dep'")
 end
 
-function resolve_gh(dep::String)
+function resolve_gh(dep::AbstractString)
   user,repo,tag,path = match(gh_shorthand, dep).captures
   if tag ≡ nothing
     tag = latest_gh_commit(user, repo)[1:7]
@@ -111,16 +112,16 @@ function resolve_gh(dep::String)
   ("http://github.com/$user/$repo/tarball/$tag", path ≡ nothing ? "" : path)
 end
 
-@test resolve("jkroso/Jest.jl") == ("http://github.com/jkroso/Jest.jl/tarball/df8f756","")
+@test resolve("jkroso/Jest.jl") == ("http://github.com/jkroso/Jest.jl/tarball/d3fb269","")
 
-function latest_gh_commit(user::String, repo::String)
+function latest_gh_commit(user::AbstractString, repo::AbstractString)
   (`curl -sL https://api.github.com/repos/$user/$repo/git/refs/heads/master`
     |> readall
     |> parseJSON
     |> data -> get_in(data, ("object", "sha")))
 end
 
-@test latest_gh_commit("jkroso", "Jest.jl")[1:7] == "df8f756"
+@test latest_gh_commit("jkroso", "Jest.jl")[1:7] == "d3fb269"
 
 function resolve_gh_tag(user, repo, tag)
   tags = `curl -sL https://api.github.com/repos/$user/$repo/tags` |> readall |> parseJSON

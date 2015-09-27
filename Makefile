@@ -5,7 +5,7 @@ dependencies: dependencies.json
 	@ln -snf .. $@/kip
 
 test: dependencies
-	@$</jest/bin/jest.jl index.jl
+	@jest index.jl
 
 install: dependencies
 	ln -snf $(PWD)/bin/kip.jl $(PREFIX)/kip
