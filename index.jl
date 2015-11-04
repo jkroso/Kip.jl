@@ -64,8 +64,8 @@ function cache(url::AbstractString)
   if !ispath(name)
     mkpath(name)
     (`curl -sL $url`
-      |> `gzip -dc`
-      |> `tar --strip-components 1 -xmpf - -C $name`
+      |> s -> pipeline(s, `gzip -dc`)
+      |> s -> pipeline(s, `tar --strip-components 1 -xmpf - -C $name`)
       |> run)
   end
   push!(cached, name)
