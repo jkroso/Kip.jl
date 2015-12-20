@@ -38,3 +38,13 @@ Kip's API consists of just two macros and to get started you only need to know t
 ### `@dirname()`
 
 `@dirname` is the other macro in Kip's API. It just returns the `dirname` of the file currently being run. Or if we are at the REPL it returns `pwd()`. You won't use it often but when you do you will be glad its there.
+
+## The Kip workflow
+
+With kip developing Julia is really simple. You just write code then `@require` in the stuff you need at the top of the file (or anywhere you feel really). If the file you are working on gets big you might be able to find a seperate module within it. To seperate this module out just cut and paste it into a seperate file then `@require` the bits you need back in to the original file. This is way better than using `include` since it's clear to the reader which symbols the other module provides. To run your code you just run it. e.g: `julia mycode.jl`. All dependencies will be loaded/updated as required.
+
+## Prospective features
+
+### Automatic reloading of modules
+
+While at the REPL it could listen to changes on the modules you require and automatically reload them into the workspace.
