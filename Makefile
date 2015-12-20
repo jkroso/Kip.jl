@@ -1,13 +1,10 @@
 PREFIX:=/usr/local/bin
 
-dependencies: dependencies.json
-	@packin install --folder $@ --meta $<
-	@ln -snf .. $@/kip
-
-test: dependencies
-	@jest index.jl
-
-install: dependencies
+install:
+	ln -fs $$PWD `julia -e 'print(Pkg.dir("Kip"))'`
 	ln -snf $(PWD)/bin/kip.jl $(PREFIX)/kip
 
-.PHONY: test install
+test:
+	julia test.jl
+
+.PHONY: install test

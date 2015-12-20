@@ -1,5 +1,5 @@
 #!/usr/bin/env julia
 
-@require ".." install
+include("../src/kip.jl")
 
-install(ARGS[1])
+require(ARGS[1], pwd())
