@@ -3,12 +3,7 @@
 Kip is an alternative module system for Julia with the goal of being more robust and easier to use. With Kip __packages don't have names__. So you can have several versions of the same package without them overwriting each other. Also it favours putting __dependency info inline__ rather than in a REQUIRE file. This reduces indirection and works well in the REPL.
 
 ```julia
-julia> @require "github.com/jkroso/emitter.jl/index.jl" emit Events
-
-/Users/jkroso/.julia/kip/github.com/jkroso/emitter.jl/tarball/e8e8a9d/index.jl
-
-julia> emit(Events("a" => () -> println("a fired")), "a")
-a fired
+julia> @require "github.com/jkroso/emitter.jl/index.jl" emit
 ```
 
 The final key differences is that it __installs dependencies at runtime__. So users never think about installing or updating their packages. It would also make hot module reloading a lot easier if I ever decide to attempt that feature.
