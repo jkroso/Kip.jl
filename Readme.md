@@ -11,7 +11,7 @@ julia> emit(Events("a" => () -> println("a fired")), "a")
 a fired
 ```
 
-The final key differences is that it __installs dependencies at runtime__. So users never think about installing or updating their packages after editing some code. It would also make hot module reloading a lot easier if I ever decide to attempt that feature.
+The final key differences is that it __installs dependencies at runtime__. So users never think about installing or updating their packages. It would also make hot module reloading a lot easier if I ever decide to attempt that feature.
 
 ## Installation
 
