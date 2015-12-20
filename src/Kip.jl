@@ -3,7 +3,15 @@ module Kip # start of module
 import JSON
 include("./deps.jl")
 
-const gh_shorthand = r"^github.com/([\w-.]+)/([\w-.]+)(?:@([^/]+))?(?:/(.+))?$"
+const gh_shorthand = r"
+  ^github.com/  # all github paths start the same way
+  ([\w-.]+)     # username
+  /
+  ([\w-.]+)     # repo
+  (?:@([^/]+))? # commit, tag, branch, or semver query (defaults to latest commit)
+  (?:/(.+))?    # path to the module inside the repo (optional)
+  $
+"x
 const relative_path = r"^\.{1,2}"
 
 ##
