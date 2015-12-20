@@ -1,6 +1,6 @@
 # Kip
 
-Kip is an alternative module system for Julia with the goal of being more robust and easier to use. With Kip __packages don't have names__. Instead modules are identified by the file they are in. So you can have several versions of the same package without them overwriting each other. Also it favours putting __dependency info inline__ rather than in a REQUIRE file. This reduces indirection and works well in the REPL. The final key differences is that it __installs dependencies at runtime__. So users never think about installing or updating their packages.
+Kip is an alternative module system for Julia with the goal of being more robust and easier to use. With Kip __packages don't have names__. Instead modules are identified by the file they are in. So you can have several versions of the same package without them overwriting each other. Also it favours putting __dependency info inline__ rather than in a REQUIRE file. This reduces indirection and works well at the REPL. The final key difference is that it __installs dependencies at runtime__. So users never think about installing or updating their packages.
 
 ## Installation
 
@@ -37,4 +37,4 @@ Kip's API consists of just two macros and to get started you only need to know t
 
 ### `@dirname()`
 
-`@dirname` is the other macro in Kip's API. It just returns `dirname` of the file currently being run. Or if we are at the REPL it returns `pwd()`. You won't use it often but when you do you will be glad its there.
+`@dirname` is the other macro in Kip's API. It just returns the `dirname` of the file currently being run. Or if we are at the REPL it returns `pwd()`. You won't use it often but when you do you will be glad its there.
