@@ -17,8 +17,7 @@ The final key differences is that it __installs dependencies at runtime__. So us
 
 ```sh
 git clone https://github.com/jkroso/Kip.jl.git kip
-cd kip
-make install
+ln -fs `realpath kip` `julia -e 'print(Pkg.dir("Kip"))'`
 ```
 
 Then add this code to your ~/.juliarc.jl
