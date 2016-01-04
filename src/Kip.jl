@@ -46,10 +46,9 @@ function download(url::AbstractString)
   name in cached && return name
   if !ispath(name)
     mkpath(name)
-    (`curl -sL $url`
-      |> s -> pipeline(s, `gzip -dc`)
-      |> s -> pipeline(s, `tar --strip-components 1 -xmpf - -C $name`)
-      |> run)
+    pipeline(`curl -sL $url`,
+             `gzip -dc`,
+             `tar --strip-components 1 -xmpf - -C $name`) |> run
   end
   push!(cached, name)
   return name
