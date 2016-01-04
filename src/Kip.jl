@@ -32,6 +32,16 @@ function complete(path::AbstractString)
   for p in (path, path * ".jl", joinpath(path, "main.jl"))
     isfile(p) && return p
   end
+
+  # check "src/$(module_name).jl". A preexisting Julia convention
+  if (name = match(r"github\.com/[^/]+/([^/]+)", path)) != nothing
+    legacy = replace(joinpath(path, "src", name[1]), r"(\.jl)?$", ".jl")
+    if ispath(legacy)
+      # TODO: install deps somehow
+      return legacy
+    end
+  end
+
   error("$path can not be completed to a file")
 end
 
@@ -128,7 +138,13 @@ function eval_module(path::AbstractString; locals...)
     include($path)
   end)
 
-  return mod
+  # unpack the submodule if thats all thats in it. For legacy support
+  locals = filter(n -> n != sym && n != :eval, names(mod, true))
+  if length(locals) == 1 && isa(mod.(locals[1]), Module)
+    mod.(locals[1])
+  else
+    mod
+  end
 end
 
 macro require(path, names...)
