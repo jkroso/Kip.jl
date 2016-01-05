@@ -45,6 +45,8 @@ There are a couple other types of paths you can pass to `@require`:
 
 ### Native Julia module support
 
+Kip provides good support for using modules written for Julia's native module system.
+
 If the only thing in a file you `@require` is a native Julia module then Kip will check to see if there is a registered module with the same name. If there is it will be installed using `Pkg.add(name)` and loaded using `import $name`. Therefore, `@require "github.com/johnmyleswhite/Benchmark.jl" compare` is exactly equivelent to `import: compare` minus the need to declare it as a dependency in a REQUIRE file. If it isn't a registered module then it will still be unboxed from its Kip module wrapper but it won't be cached by the internals of Julia's module system. This is probably fine though since Julia currently has no good way of using unregistered modules it's unlikely to be duplicated elseware in you dependency tree.
 
 ## The Kip workflow
