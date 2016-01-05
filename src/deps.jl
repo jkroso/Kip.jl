@@ -4,7 +4,14 @@
 #
 # jkroso/SemverQuery.jl
 #
-const semver_regex = Regex("([<>]=?)?$(Base.VERSION_REGEX.pattern[2:end-1])", "ix")
+
+const semver_regex = r"^
+  ([<>]=?)?    # operator (optional)
+  v?           # prefix   (optional)
+  (\d{1,4})    # major    (required)
+  (?:\.(\d+))? # minor    (optional)
+  (?:\.(\d+))? # patch    (optional)
+$"x
 
 abstract VersionQuery
 
