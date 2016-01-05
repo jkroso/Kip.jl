@@ -47,7 +47,7 @@ There are a couple other types of paths you can pass to `@require`:
 
 Kip provides good support for using modules written for Julia's native module system.
 
-If the only thing in a file you `@require` is a native Julia module then Kip will check to see if there is a registered module with the same name. If there is it will be installed using `Pkg.add(name)` and loaded using `import $name`. Therefore, `@require "github.com/johnmyleswhite/Benchmark.jl" compare` is exactly equivelent to `import Benchmark: compare` minus the need to declare it as a dependency in a REQUIRE file. If it isn't a registered module then it will still be unboxed from Kip's wrapper but it won't be cached by the internals of Julia's module system. This is probably fine though since Julia currently has no good way of using unregistered modules it's unlikely to be duplicated elseware in you dependency tree.
+If the only thing in a file you `@require` is a native Julia module then Kip will check to see if there is a registered module with the same name. If there is it will be installed using `Pkg.add(name)` and loaded using `import $name`. Therefore, `@require "github.com/johnmyleswhite/Benchmark.jl" compare` is exactly equivalent to `import Benchmark: compare` minus the need to declare it as a dependency in a REQUIRE file. If it isn't a registered module then it will still be unboxed from Kip's wrapper but it won't be cached by the internals of Julia's module system. This is probably fine though since Julia currently has no good way of using unregistered modules it's unlikely to be duplicated elsewhere in you dependency tree.
 
 ## The Kip workflow
 
@@ -61,7 +61,7 @@ This demonstrates mixed use of native modules and Kip modules. It also shows how
 
 ##### [URI parser benchmark](//github.com/coiljl/URI/blob/master/Readme.ipynb)
 
-Here Kip enabled me to put my benchmark code directly in this projects Readme.ipynb file since I didn't need to worry about installing the dependencies. With Julia's package manager I would of had to install the benchmark dependencies imperitively to acheive this.
+Here Kip enabled me to put my benchmark code directly in this projects Readme.ipynb file since I didn't need to worry about installing the dependencies. With Julia's package manager I would of had to install the benchmark dependencies imperatively to achieve this.
 
 ## Prospective features
 
@@ -75,4 +75,4 @@ Kips ability to load multiple versions of a module at the same time is a double 
 
 ### Offline mode
 
-Kip currently updates all dependencies everytime a file is run. This slows down startup time significantly. It would be nice to have a local mode which only downloads new dependecies and just assumes old ones are still up to date.
+Kip currently updates all dependencies every time a file is run. This slows down startup time significantly. It would be nice to have a local mode which only downloads new dependencies and just assumes old ones are still up to date.
