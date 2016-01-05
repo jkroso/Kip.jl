@@ -47,6 +47,12 @@ There are a couple other types of paths you can pass to `@require`:
 
 With kip developing Julia is really simple. You just write code then `@require` in the stuff you need at the top of the file (or anywhere you like really). If the file you are working on gets big you might be able to find a separate module within it. To separate this module out just cut and paste it into a separate file then `@require` the bits you need back in to the original file. This is way better than using `include` since it's clear to the reader which symbols the other module provides. To run your code you just run it. e.g: `julia mycode.jl`. All dependencies will be loaded/updated as required.
 
+## Example projects
+
+##### [Jest](//github.com/jkroso/jest)
+
+This demonstrates the mixed use of prejects using the built in module system and native Kip modules. It also shows how nice Kip is for writing CLI programs since there is no seperate installation process. So installing Jest is just a matter of linking its binary into the user's $PATH.
+
 ## Prospective features
 
 ### Automatic reloading of modules
