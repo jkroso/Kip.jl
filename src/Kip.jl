@@ -37,7 +37,6 @@ function complete(path::AbstractString)
   legacy = joinpath(path, "src", reponame(path))
   # ensure the path ends in a ".jl"
   legacy = replace(legacy, r"(\.jl)?$", ".jl")
-  # TODO: install deps somehow
   ispath(legacy) && return legacy
 
   error("$path can not be completed to a file")
@@ -152,7 +151,16 @@ function eval_module(path::AbstractString; locals...)
   # unpack the submodule if thats all thats in it. For legacy support
   locals = filter(n -> n != sym && n != :eval, names(mod, true))
   if length(locals) == 1 && isa(mod.(locals[1]), Module)
-    mod.(locals[1])
+    name = locals[1]
+    try
+      # try loading it using the native module system so we don't end
+      # up duplicating the module
+      ispath(Pkg.dir(string(name))) || Pkg.add(string(name))
+      eval(:(import $name; $name))
+    catch e
+      # it mustn't be registered so just return the module we have
+      mod.(name)
+    end
   else
     mod
   end
