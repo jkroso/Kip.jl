@@ -34,15 +34,22 @@ function complete(path::AbstractString)
   end
 
   # check "src/$(module_name).jl". A preexisting Julia convention
-  if (name = match(r"github\.com/[^/]+/([^/]+)", path)) != nothing
-    legacy = replace(joinpath(path, "src", name[1]), r"(\.jl)?$", ".jl")
-    if ispath(legacy)
-      # TODO: install deps somehow
-      return legacy
-    end
-  end
+  legacy = joinpath(path, "src", reponame(path))
+  # ensure the path ends in a ".jl"
+  legacy = replace(legacy, r"(\.jl)?$", ".jl")
+  # TODO: install deps somehow
+  ispath(legacy) && return legacy
 
   error("$path can not be completed to a file")
+end
+
+##
+# Take a guess at what the module must be called
+#
+function reponame(path)
+  m = match(r"github\.com/[^/]+/([^/]+)", path)
+  m == nothing || return m[1]
+  return basename(path)
 end
 
 const cache_dir = joinpath(homedir(), ".julia", "kip")
