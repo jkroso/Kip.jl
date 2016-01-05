@@ -45,10 +45,14 @@ There are a couple other types of paths you can pass to `@require`:
 
 ## The Kip workflow
 
-With kip developing Julia is really simple. You just write code then `@require` in the stuff you need at the top of the file (or anywhere you feel really). If the file you are working on gets big you might be able to find a seperate module within it. To seperate this module out just cut and paste it into a seperate file then `@require` the bits you need back in to the original file. This is way better than using `include` since it's clear to the reader which symbols the other module provides. To run your code you just run it. e.g: `julia mycode.jl`. All dependencies will be loaded/updated as required.
+With kip developing Julia is really simple. You just write code then `@require` in the stuff you need at the top of the file (or anywhere you like really). If the file you are working on gets big you might be able to find a seperate module within it. To seperate this module out just cut and paste it into a seperate file then `@require` the bits you need back in to the original file. This is way better than using `include` since it's clear to the reader which symbols the other module provides. To run your code you just run it. e.g: `julia mycode.jl`. All dependencies will be loaded/updated as required.
 
 ## Prospective features
 
 ### Automatic reloading of modules
 
 While at the REPL it could listen to changes on the modules you require and automatically reload them into the workspace.
+
+### Dependency tree linting
+
+Kips ability to load multiple versions of a module at the same time is a double edged sword. The upside is package developers can make breaking changes to their API's without instantly breaking all their dependent projects. The downside is that if you and your dependencies have dependencies in common and they load different versions of these modules to you then you might run into issues when passing Type instances back and fourth between your direct dependencies. This is a subtle problem which can be hard to recognize. Expecially if you not aware that it can happen. A good solution to this might be to use a static analysis tool to check your dependency tree for potential instances of this problem
