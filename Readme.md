@@ -51,7 +51,7 @@ With kip developing Julia is really simple. You just write code then `@require` 
 
 ##### [Jest](//github.com/jkroso/Jest.jl)
 
-This demonstrates the mixed use of prejects using the built in module system and native Kip modules. It also shows how nice Kip is for writing CLI programs since there is no seperate installation process. So installing Jest is just a matter of linking its binary into the user's $PATH.
+This demonstrates mixed use of native modules and Kip modules. It also shows how nice Kip is for writing CLI programs. Since its dependencies will be installed at runtime Jest's CLI script only needs to be symlinked into the user's $PATH.
 
 ##### [URI parser benchmark](//github.com/coiljl/URI/blob/master/Readme.ipynb)
 
