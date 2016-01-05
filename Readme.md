@@ -49,9 +49,13 @@ With kip developing Julia is really simple. You just write code then `@require` 
 
 ## Example projects
 
-##### [Jest](//github.com/jkroso/jest)
+##### [Jest](//github.com/jkroso/Jest.jl)
 
 This demonstrates the mixed use of prejects using the built in module system and native Kip modules. It also shows how nice Kip is for writing CLI programs since there is no seperate installation process. So installing Jest is just a matter of linking its binary into the user's $PATH.
+
+##### [URI parser benchmark](//github.com/coiljl/URI/blob/master/Readme.ipynb)
+
+Here Kip enabled me to put my benchmark code directly in this projects Readme.ipynb file since I didn't need to worry about installing the dependencies. With Julia's package manager I would of had to install the benchmark dependencies imperitively to acheive this.
 
 ## Prospective features
 
