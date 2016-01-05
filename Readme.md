@@ -28,12 +28,16 @@ Kip's API consists of just two macros and to get started you only need to know t
 
 ### `@require(pkg::String, imports::Symbol...)`
 
-`@require` takes a path to a package and a list of symbols to import from that package. If you want to use a different name locally for any of these symbols your can pass a `Pair` of symbols like `@require "./thing" a => b`. This will import `a` from the local package `"./thing"` and make it available as `b`. Now I just need to explain the syntax of the path parameter. In this example I'm using a relative path from the REPL's `pwd()`. Or if I was editing a file it would be the `dirname()` of that file. The syntax for relative imports is inspired by unix paths. Now assuming we are at the REPL what `@require` does under the hood is checks for a file called `joinpath(pwd(), "./thing")`. If it exists it will load it. Otherwise it checks a couple other paths `joinpath(pwd(), "./thing.jl")` and `joinpath(pwd(), "./thing/main.jl")`. This just enables you to save a bit of typing if you feel like it. There are a couple other types of paths you can pass to `@require`:
+`@require` takes a path to a package and a list of symbols to import from that package. If you want to use a different name locally for any of these symbols your can pass a `Pair` of symbols like `@require "./thing" a => b`. This will import `a` from the local package `"./thing"` and make it available as `b`.
 
-- Absolute: `@require "/Users/jkroso/thing" a`
-- Github: `@require "github.com/jkroso/thing" a`
+Now I just need to explain the syntax of the path parameter. In this example I'm using a relative path which is resolved relative to the REPL's `pwd()`. Or if I was editing a file it would be the `dirname()` of that file. This should be familiar for people who use unix machines. Now, assuming we are at the REPL, what `@require` does under the hood is check for a file called `joinpath(pwd(), "./thing")`. If it exists it will load it. Otherwise it tries a few other paths `joinpath(pwd(), "./thing.jl")`, `joinpath(pwd(), "./thing/main.jl")`, and `joinpath(pwd(), "./thing/src/thing.jl")`. This just enables you to save a bit of typing if you feel like it.
 
-  This syntax is actually pretty complex since it also needs to enable you to specify which ref (tag/commit/branch) you want to use. Here I haven't specified a ref so it uses the latest commit. If I want to specify one I put it after the reponame prefixed with an "@". e.g: `@require "github.com/jkroso/thing@1" a` This looks like a semver query so it will be run over all tags in the repo with the latest matching tag being the one that gets used. Finally if the module we want from the repository isn't called "main.jl" then we will need to specify its path. e.g: `@require "github.com/jkroso/thing@1/thing" a`. Path completion will also be applied just like with relative paths so the module might actually be called "thing.jl" or "thing/main.jl"
+There are a couple other types of paths you can pass to `@require`:
+
+- Absolute: `@require "/Users/jkroso/thing"`
+- Github: `@require "github.com/jkroso/thing"`
+
+  This syntax is actually pretty complex since it also needs to enable you to specify which ref (tag/commit/branch) you want to use. Here I haven't specified a ref so it uses the latest commit. If I want to specify one I put it after the reponame prefixed with an "@". e.g: `@require "github.com/jkroso/thing@1"` This looks like a semver query so it will be run over all tags in the repo and the latest tag that matches the query is the one that gets used. Finally, if the module we want from the repository isn't called "main.jl", or "src/$(reponame).jl" then we will need to specify its path. e.g: `@require "github.com/jkroso/thing@1/thing"`. And path completion will also be applied just like with relative and absolute paths.
 
 ### `@dirname()`
 
