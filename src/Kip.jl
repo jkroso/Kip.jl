@@ -95,14 +95,10 @@ function resolve_gh(dep::AbstractString)
 end
 
 function latest_gh_commit(user::AbstractString, repo::AbstractString)
-  try
-    (`curl -sL https://api.github.com/repos/$user/$repo/git/refs/heads/master`
-      |> readall
-      |> JSON.parse
-      |> data -> get_in(data, ("object", "sha")))
-  catch e
-    error("Problem determining latest commit for $user/$repo")
-  end
+  (`curl -sL https://api.github.com/repos/$user/$repo/git/refs/heads/master`
+    |> readall
+    |> JSON.parse
+    |> data -> get_in(data, ("object", "sha")))
 end
 
 function resolve_gh_tag(user, repo, tag)

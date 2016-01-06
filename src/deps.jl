@@ -93,14 +93,10 @@ const undefined = Dict()
 ##
 # An unsafe get
 #
-function get(a, key)
+function getKey(a, key)
   a = get(a, key, undefined)
   a ≡ undefined && error("can't get property: $key")
   return a
 end
 
-##
-# Like the 3 argument version except it throws if it
-# the `path` is not defined
-#
-get_in(a, path) = foldl(get, a, path)
+get_in(a, path) = foldl(getKey, a, path)
