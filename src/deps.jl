@@ -93,7 +93,7 @@ const undefined = Dict()
 ##
 # An unsafe get
 #
-function Base.get(a, key)
+function get(a, key)
   a = get(a, key, undefined)
   a ≡ undefined && error("can't get property: $key")
   return a
