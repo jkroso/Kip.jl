@@ -132,9 +132,22 @@ function require(path::AbstractString, base::AbstractString; locals...)
   cache[name] = eval_module(name; locals...)
 end
 
+const native_module_path = r"github\.com/([^/]+)/([^/.]+)(?:\.jl)?/tarball/[^/]+/src/([^/]+)\.jl"
+
 function eval_module(path::AbstractString; locals...)
   sym = symbol(path)
   mod = Module(sym)
+
+  # is a registered module
+  m = match(native_module_path, path)
+  if m != nothing && m[2] == m[3] && ispath(Pkg.dir("METADATA", m[2]))
+    url = readall(Pkg.dir("METADATA", m[2], "url"))
+    user,name = match(r"github.com/([^/]+)/([^/.]+)", url).captures
+    if user == m[1] && name == m[2]
+      ispath(Pkg.dir(name)) || Pkg.add(name)
+      return eval(:(import $(symbol(name)); $(symbol(name))))
+    end
+  end
 
   eval(mod, quote
     using Kip
@@ -147,19 +160,10 @@ function eval_module(path::AbstractString; locals...)
   # unpack the submodule if thats all thats in it. For legacy support
   locals = filter(n -> n != sym && n != :eval, names(mod, true))
   if length(locals) == 1 && isa(mod.(locals[1]), Module)
-    name = locals[1]
-    try
-      # try loading it using the native module system so we don't end
-      # up duplicating the module
-      ispath(Pkg.dir(string(name))) || Pkg.add(string(name))
-      eval(:(import $name; $name))
-    catch e
-      # it mustn't be registered so just return the module we have
-      mod.(name)
-    end
-  else
-    mod
+    return mod.(locals[1])
   end
+
+  return mod
 end
 
 macro require(path, names...)
