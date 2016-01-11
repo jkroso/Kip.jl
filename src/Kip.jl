@@ -63,7 +63,6 @@ function download(url::AbstractString)
   if !ispath(name)
     mkpath(name)
     pipeline(`curl -sL $url`,
-             `gzip -dc`,
              `tar --strip-components 1 -xmpf - -C $name`) |> run
   end
   push!(cached, name)
