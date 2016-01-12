@@ -63,6 +63,10 @@ This demonstrates mixed use of native modules and Kip modules. It also shows how
 
 Here Kip enabled me to put my benchmark code directly in this projects Readme.ipynb file since I didn't need to worry about installing the dependencies. With Julia's package manager I would of had to install the benchmark dependencies imperatively to achieve this.
 
+##### [packin](//github.com/jkroso/packin/blob/d2103c4937f3303fd2f94e7f8bda4cd176020f23/packin#L2)
+
+Here I'm using a fork of a registered module (AnsiColor) while I wait for the projects owner to review the pull request. Alongside that I am using a registered module (DocOpt) and a plain Kip module ("./main") which covers the full range of Kip's options
+
 ## Prospective features
 
 ### Automatic reloading of modules
