@@ -1,3 +1,5 @@
+__precompile__()
+
 module Kip # start of module
 
 import JSON
