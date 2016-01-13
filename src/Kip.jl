@@ -53,14 +53,13 @@ function reponame(path)
   return basename(path)
 end
 
-const cache_dir = joinpath(homedir(), ".julia", "kip")
 const cached = Set{AbstractString}()
 
 ##
 # Download a package and return its local location
 #
 function download(url::AbstractString)
-  name = joinpath(cache_dir, replace(url, r"^.*://", ""))
+  name = joinpath(tempdir(), replace(url, r"^.*://", ""))
   name in cached && return name
   if !ispath(name)
     mkpath(name)
