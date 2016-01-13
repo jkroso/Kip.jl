@@ -2,6 +2,7 @@ __precompile__()
 
 module Kip # start of module
 
+import Requests
 import JSON
 include("./deps.jl")
 
@@ -15,6 +16,17 @@ const gh_shorthand = r"
   $
 "x
 const relative_path = r"^\.{1,2}"
+
+function GET(url; meta=Dict())
+  response = Requests.get(encode(url); headers=meta)
+  if response.status >= 400
+    error("status $(response.status) for $(encode(url))")
+  else
+    response.data
+  end
+end
+
+parseJSON(data::Vector{UInt8}) = JSON.parse(bytestring(data))
 
 ##
 # Run Julia's conventional install hook
@@ -63,8 +75,10 @@ function download(url::AbstractString)
   name in cached && return name
   if !ispath(name)
     mkpath(name)
-    pipeline(`curl -sL $url`,
-             `tar --strip-components 1 -xmpf - -C $name`) |> run
+    stdin, proc = open(`tar --strip-components 1 -xmpf - -C $name`, "w")
+    write(stdin, GET(url))
+    close(stdin)
+    wait(proc)
   end
   push!(cached, name)
   return name
@@ -95,14 +109,12 @@ function resolve_gh(dep::AbstractString)
 end
 
 function latest_gh_commit(user::AbstractString, repo::AbstractString)
-  (`curl -sL https://api.github.com/repos/$user/$repo/git/refs/heads/master`
-    |> readall
-    |> JSON.parse
-    |> data -> get_in(data, ("object", "sha")))
+  url = "https://api.github.com/repos/$user/$repo/git/refs/heads/master"
+  parseJSON(GET(url))["object"]["sha"]
 end
 
 function resolve_gh_tag(user, repo, tag)
-  tags = `curl -sL https://api.github.com/repos/$user/$repo/tags` |> readall |> JSON.parse
+  tags = GET("https://api.github.com/repos/$user/$repo/tags") |> parseJSON
   findmax(semver_query(tag), VersionNumber[t["name"] for t in tags])
 end
 

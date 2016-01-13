@@ -83,20 +83,16 @@ Base.findmax(q::VersionQuery, enumerable) = begin
   return best_v
 end
 
-
 ##
-# jkroso/prospects.jl
+# coiljl/URI
 #
+const control = (map(UInt8, 0:parse(Int,"1f",16)) |> collect |> ascii) * "\x7f"
+const blacklist = Set("<>\",;+\$![]'* {}|\\^`" * control)
 
-const undefined = Dict()
+encode_match(substr) = string('%', uppercase(hex(substr[1], 2)))
 
-##
-# An unsafe get
-#
-function getKey(a, key)
-  a = get(a, key, undefined)
-  a ≡ undefined && error("can't get property: $key")
-  return a
-end
-
-get_in(a, path) = foldl(getKey, a, path)
+"""
+Hex encode characters which might be dangerous in certain contexts without
+obfuscating it so much that it loses its structure as a uri string
+"""
+encode(str::AbstractString) = replace(str, blacklist, encode_match)
