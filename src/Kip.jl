@@ -75,7 +75,7 @@ function download(url::AbstractString)
   name in cached && return name
   if !ispath(name)
     mkpath(name)
-    stdin, proc = open(`tar --strip-components 1 -xmpf - -C $name`, "w")
+    stdin, proc = open(`tar --strip-components 1 -xmpzf - -C $name`, "w")
     write(stdin, GET(url))
     close(stdin)
     wait(proc)
