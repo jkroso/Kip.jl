@@ -53,30 +53,39 @@ If the only thing in a file you `@require` is a native Julia module then Kip wil
 
 With kip developing Julia is really simple. You just write code then `@require` in the stuff you need at the top of the file (or anywhere you like really). If the file you are working on gets big you might be able to find a separate module within it. To separate this module out just cut and paste it into a separate file then `@require` the bits you need back in to the original file. This is way better than using `include` since it's clear to the reader which symbols the other module provides. To run your code you just run it. e.g: `julia mycode.jl`. All dependencies will be loaded/updated as required.
 
+## Running arbitrary code on another machine
+
+Since dependencies are declared in the code you can pipe arbitrary code into a machine running Julia and have the results piped back. Or on the other hand you could `curl $url | julia` to run remote code on your local machine. Here is an example of running some code through a docker instance (BTW so long as you have docker installed you can run this)
+
+```bash
+$ echo '@require "github.com/coiljl/URI" encode; encode("1 <= 2")' | docker run -i jkroso/kip.jl
+"1%20%3C=%202"
+```
+
 ## Example projects
 
 ##### [Jest](//github.com/jkroso/Jest.jl)
 
-This demonstrates mixed use of native modules and Kip modules. It also shows how nice Kip is for writing CLI programs. Since its dependencies will be installed at runtime Jest's CLI script only needs to be symlinked into the user's $PATH.
+This demonstrates mixed use of native modules and Kip modules. It also shows how nice Kip is for writing CLI programs. Since its dependencies will be installed at runtime Jest's CLI script only needs to be downloaded and put in the user's $PATH.
 
 ##### [URI parser benchmark](//github.com/coiljl/URI/blob/master/Readme.ipynb)
 
-Here Kip enabled me to put my benchmark code directly in this projects Readme.ipynb file since I didn't need to worry about installing the dependencies. With Julia's package manager I would of had to install the benchmark dependencies imperatively to achieve this.
+Here Kip enabled me to put my benchmark code directly in this projects Readme.ipynb file since I didn't need to worry about installing the dependencies.
 
 ##### [packin](//github.com/jkroso/packin/blob/d2103c4937f3303fd2f94e7f8bda4cd176020f23/packin#L2)
 
-Here I'm using a fork of a registered module (AnsiColor) while I wait for the projects owner to review the pull request. Alongside that I am using a registered module (DocOpt) and a plain Kip module ("./main") which covers the full range of Kip's options
+Here I'm using a fork of a registered module (AnsiColor) while I wait for the projects owner to review the pull request.
 
 ## Prospective features
 
-### Automatic reloading of modules
+##### Automatic reloading of modules
 
 While at the REPL it could listen to changes on the modules you require and automatically reload them into the workspace.
 
-### Dependency tree linting
+##### Dependency tree linting
 
 Kips ability to load multiple versions of a module at the same time is a double edged sword. The upside is package developers can make breaking changes to their API's without instantly breaking all their dependent projects. The downside is that if you and your dependencies have dependencies in common and they load different versions of these modules to you then you might run into issues if you passing Type instances back and fourth between your direct dependencies. This is a subtle problem which can be hard to recognize. Especially if you not aware that it can happen. A good solution to this might be to use a static analysis tool to check your dependency tree for potential instances of this problem. It would make sense to make it part of a [linting tool](//github.com/tonyhffong/Lint.jl).
 
-### Offline mode
+##### Offline mode
 
 Kip currently updates all dependencies every time a file is run. This slows down startup time significantly. It would be nice to have a local mode which only downloads new dependencies and just assumes old ones are still up to date.
