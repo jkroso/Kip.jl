@@ -45,13 +45,9 @@ There are a couple other types of paths you can pass to `@require`:
 
 ### Native Julia module support
 
-Kip provides good support for using modules written for Julia's native module system.
+If the module you require is registered in `Pkg.dir("METADATA")` then it will be installed and loaded using the built in module system. So  `@require "github.com/johnmyleswhite/Benchmark.jl" compare` is exactly equivalent to `import Benchmark: compare`. This reduces the likelihood of ending up with duplicate modules being loaded within `Kip` and `Pkg`'s respective caches. Especially while Julia doesn't provide any good way to load non-registered modules.
 
-If the only thing in a file you `@require` is a native Julia module then Kip will check to see if there is a registered module with the same name. If there is it will be installed using `Pkg.add(name)` and loaded using `import $name`. Therefore, `@require "github.com/johnmyleswhite/Benchmark.jl" compare` is exactly equivalent to `import Benchmark: compare` minus the need to declare it as a dependency in a REQUIRE file. If it isn't a registered module then it will still be unboxed from Kip's wrapper but it won't be cached by the internals of Julia's module system. This is probably fine though since Julia currently has no good way of using unregistered modules it's unlikely to be duplicated elsewhere in you dependency tree.
-
-## The Kip workflow
-
-With kip developing Julia is really simple. You just write code then `@require` in the stuff you need at the top of the file (or anywhere you like really). If the file you are working on gets big you might be able to find a separate module within it. To separate this module out just cut and paste it into a separate file then `@require` the bits you need back in to the original file. This is way better than using `include` since it's clear to the reader which symbols the other module provides. To run your code you just run it. e.g: `julia mycode.jl`. All dependencies will be loaded/updated as required.
+Kip also supports non-registered modules by looking at the contents of the file you are requiring to see if the only thing in it is a `Module`. When that's the case it will unbox it from the wrapper Kip normally uses. If Julia ever provides good support for non-registered modules itself then Kip will `Pkg.clone` the module and `import` it to match its handling of registered modules.
 
 ## Running arbitrary code on another machine
 
