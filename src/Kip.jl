@@ -106,13 +106,21 @@ function resolve_gh(dep::AbstractString)
   ("http://github.com/$user/$repo/tarball/$tag", path ≡ nothing ? "" : path)
 end
 
+const username = get(ENV, "GITHUB_USERNAME", "")
+const password = get(ENV, "GITHUB_PASSWORD", "")
+const headers = Dict{ASCIIString,ASCIIString}()
+
+if !isempty(username) && !isempty(password)
+  headers["Authorization"] = "Basic " * base64encode(string(username, ':', password))
+end
+
 function latest_gh_commit(user::AbstractString, repo::AbstractString)
   url = "https://api.github.com/repos/$user/$repo/git/refs/heads/master"
-  parseJSON(GET(url))["object"]["sha"]
+  parseJSON(GET(url, headers))["object"]["sha"]
 end
 
 function resolve_gh_tag(user, repo, tag)
-  tags = GET("https://api.github.com/repos/$user/$repo/tags") |> parseJSON
+  tags = GET("https://api.github.com/repos/$user/$repo/tags", headers) |> parseJSON
   findmax(semver_query(tag), VersionNumber[t["name"] for t in tags])
 end
 
