@@ -88,12 +88,28 @@ end
 function resolve(path::AbstractString, base::AbstractString)
   path[1] == '/' && return complete(path)
   ismatch(relative_path, path) && return complete(joinpath(base, path))
-  @assert ismatch(gh_shorthand, path) "unable to resolve '$path'"
+  m = match(gh_shorthand, path)
+  @assert m != nothing  "unable to resolve '$path'"
+  username, reponame = m.captures
+  pkgname = replace(reponame, r"\.jl$", "")
+  if isregistered(username, pkgname)
+    ispath(Pkg.dir(pkgname)) || Pkg.add(pkgname)
+    return Pkg.dir(pkgname) |> complete
+  end
   url,path = resolve_gh(path)
   package = download(url)
   path = isempty(path) ? package : joinpath(package, path)
   build(package)
   complete(path)
+end
+
+function isregistered(username::AbstractString, pkgname::AbstractString)
+  # same name as a registered module
+  ispath(Pkg.dir("METADATA", pkgname)) || return false
+  url = readall(Pkg.dir("METADATA", pkgname, "url"))
+  m = match(r"github.com/([^/]+)/([^/.]+)", url).captures
+  # is a registered module
+  username == m[1] && pkgname == m[2]
 end
 
 function resolve_gh(dep::AbstractString)
@@ -116,11 +132,11 @@ end
 
 function latest_gh_commit(user::AbstractString, repo::AbstractString)
   url = "https://api.github.com/repos/$user/$repo/git/refs/heads/master"
-  parseJSON(GET(url, headers))["object"]["sha"]
+  parseJSON(GET(url; meta=headers))["object"]["sha"]
 end
 
 function resolve_gh_tag(user, repo, tag)
-  tags = GET("https://api.github.com/repos/$user/$repo/tags", headers) |> parseJSON
+  tags = GET("https://api.github.com/repos/$user/$repo/tags"; meta=headers) |> parseJSON
   findmax(semver_query(tag), VersionNumber[t["name"] for t in tags])
 end
 
@@ -150,21 +166,14 @@ function require(path::AbstractString, base::AbstractString; locals...)
   cache[name] = eval_module(name; locals...)
 end
 
-const native_module_path = r"github\.com/([^/]+)/([^/.]+)(?:\.jl)?/tarball/[^/]+/src/([^/]+)\.jl"
-
 function eval_module(path::AbstractString; locals...)
   sym = symbol(path)
   mod = Module(sym)
 
-  # is a registered module
-  m = match(native_module_path, path)
-  if m != nothing && m[2] == m[3] && ispath(Pkg.dir("METADATA", m[2]))
-    url = readall(Pkg.dir("METADATA", m[2], "url"))
-    user,name = match(r"github.com/([^/]+)/([^/.]+)", url).captures
-    if user == m[1] && name == m[2]
-      ispath(Pkg.dir(name)) || Pkg.add(name)
-      return eval(:(import $(symbol(name)); $(symbol(name))))
-    end
+  # if installed in native location then load it using native system
+  if startswith(path, Pkg.dir())
+    name = split(replace(path, Pkg.dir(), ""), '/', keep=false)[1]
+    return eval(:(import $(symbol(name)); $(symbol(name))))
   end
 
   eval(mod, quote
