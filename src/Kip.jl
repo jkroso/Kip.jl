@@ -69,7 +69,7 @@ const cached = Set{AbstractString}()
 # Download a package and return its local location
 #
 function download(url::AbstractString)
-  name = joinpath(tempdir(), replace(url, r"^.*://", ""))
+  name = joinpath(homedir(), ".kip", replace(url, r"^.*://", ""))
   name in cached && return name
   if !ispath(name)
     mkpath(name)
