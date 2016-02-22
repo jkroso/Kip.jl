@@ -189,9 +189,11 @@ function eval_module(name::Symbol; locals...)
 end
 
 macro require(path, names...)
+  # @require "path" => name ...
   if isa(path, Expr)
     path,name = path.args
     name = esc(name)
+  # @require "path" ...
   else
     isempty(names) && return :(require($path))
     name = symbol(path)
@@ -205,6 +207,11 @@ macro require(path, names...)
       if n.head == :macrocall
         # support importing macros
         append!(names, n.args)
+      elseif n.head == :&
+        # import all exported symbols TODO: defer require until runtime
+        m = require(path)
+        mn = module_name(m)
+        append!(names, filter(n -> n != mn, Base.names(m)))
       else
         # support renaming variables as they are imported
         @assert n.head == symbol("=>")
