@@ -63,14 +63,11 @@ function reponame(path)
   return basename(path)
 end
 
-const cached = Set{AbstractString}()
-
 ##
 # Download a package and return its local location
 #
 function download(url::AbstractString)
   name = joinpath(homedir(), ".kip", replace(url, r"^.*://", ""))
-  name in cached && return name
   if !ispath(name)
     mkpath(name)
     stdin, proc = open(`tar --strip-components 1 -xmpzf - -C $name`, "w")
@@ -78,7 +75,6 @@ function download(url::AbstractString)
     close(stdin)
     wait(proc)
   end
-  push!(cached, name)
   return name
 end
 
@@ -140,9 +136,6 @@ function resolve_gh_tag(user, repo, tag)
   findmax(semver_query(tag), VersionNumber[t["name"] for t in tags])
 end
 
-# Can be emptied with `empty!`
-const cache = Dict{AbstractString,Module}()
-
 # Can be set using `Kip.eval`
 entry = pwd()
 
@@ -161,31 +154,33 @@ end
 # Require `path` relative to `base`
 #
 function require(path::AbstractString, base::AbstractString; locals...)
-  name = realpath(resolve(path, base))
-  haskey(cache, name) && return cache[name]
-  cache[name] = eval_module(name; locals...)
+  name = symbol(realpath(resolve(path, base)))
+  if !isdefined(Main, name)
+    eval(Main, :(const $name = $(eval_module(name; locals...))))
+  end
+  Main.(name)
 end
 
-function eval_module(path::AbstractString; locals...)
-  sym = symbol(path)
-  mod = Module(sym)
+function eval_module(name::Symbol; locals...)
+  path = string(name)
+  mod = Module(name)
 
   # if installed in native location then load it using native system
   if startswith(path, Pkg.dir())
-    name = split(replace(path, Pkg.dir(), ""), '/', keep=false)[1]
-    return eval(:(import $(symbol(name)); $(symbol(name))))
+    name = symbol(split(replace(path, Pkg.dir(), ""), '/', keep=false)[1])
+    return eval(:(import $name; $name))
   end
 
   eval(mod, quote
     using Kip
-    eval(x) = Core.eval($sym, x)
+    eval(x) = Core.eval($name, x)
     eval(m, x) = Core.eval(m, x)
     $([:(const $k = $v) for (k,v) in locals]...)
     include($path)
   end)
 
-  # unpack the submodule if thats all thats in it. For legacy support
-  locals = filter(n -> n != sym && n != :eval, names(mod, true))
+  # unpack the submodule if thats all thats in it. For unregistered native modules
+  locals = filter(n -> n != name && n != :eval, names(mod, true))
   if length(locals) == 1 && isa(mod.(locals[1]), Module)
     return mod.(locals[1])
   end
