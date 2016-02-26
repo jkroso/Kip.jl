@@ -136,9 +136,18 @@ function resolve_gh_tag(user, repo, tag)
   findmax(semver_query(tag), VersionNumber[t["name"] for t in tags])
 end
 
-# Can be set using `Kip.eval`
+"""
+The directory the application is located in. If your running `julia /some/file.jl`
+then `entry`  should be set to `"/some"`
+
+Can be set using `Kip.eval(:(entry = "/some/path"))`
+"""
 entry = pwd()
 
+"""
+Get the directory the current file is stored in. If your in the REPL
+it will just return `entry`
+"""
 macro dirname()
   :(current_module() === Main ? entry : dirname(string(current_module())))
 end
@@ -188,6 +197,47 @@ function eval_module(name::Symbol; locals...)
   return mod
 end
 
+"""
+Import objects from another file by name
+
+```julia
+@require "./user" User Address
+```
+
+The above code will import `User` and `Address` from the file `@dirname()/user.jl`.
+If you want to use a different name for one of these variables to what they are named
+in there own file you can do this by:
+
+```julia
+@require "./user" User => Person
+```
+
+To refer to the `Module` object of the file being required:
+
+```julia
+@require "./user" => UserModule
+```
+
+To load all exported variables verbatim:
+
+```julia
+@require "./user" exports...
+```
+
+To load a module from github:
+
+```julia
+@require "github.com/jkroso/Emitter.jl/main.jl" emit
+```
+
+NB: You don't actually need to specify the file you want out of the repository
+in this case since by default it assumes its the file called "main.jl". It will
+also try "src/Emitter.jl" hence native modules are fully supported and should
+feel as first class as a module which is designed for Kip.jl
+
+To load a registered module just use its registered url. Note that in this case
+its actually loaded using the native module system under the hood.
+"""
 macro require(path, names...)
   # @require "path" => name ...
   if isa(path, Expr)
@@ -207,8 +257,9 @@ macro require(path, names...)
       if n.head == :macrocall
         # support importing macros
         append!(names, n.args)
-      elseif n.head == :&
-        # import all exported symbols TODO: defer require until runtime
+      elseif n.head == :...
+        # import all exported symbols
+        # TODO: defer require until runtime
         m = require(path)
         mn = module_name(m)
         append!(names, filter(n -> n != mn, Base.names(m)))
