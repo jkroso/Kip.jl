@@ -1,3 +1,5 @@
+__precompile__(true)
+
 module Kip # start of module
 
 import Requests
@@ -142,7 +144,10 @@ then `entry`  should be set to `"/some"`
 
 Can be set using `Kip.eval(:(entry = "/some/path"))`
 """
-entry = pwd()
+
+function __init__()
+  global entry = pwd()
+end
 
 """
 Get the directory the current file is stored in. If your in the REPL
