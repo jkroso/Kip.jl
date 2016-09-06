@@ -122,7 +122,7 @@ end
 
 const username = get(ENV, "GITHUB_USERNAME", "")
 const password = get(ENV, "GITHUB_PASSWORD", "")
-const headers = Dict{ASCIIString,ASCIIString}()
+const headers = Dict{String,String}()
 
 if !isempty(username) && !isempty(password)
   headers["Authorization"] = "Basic " * base64encode(string(username, ':', password))

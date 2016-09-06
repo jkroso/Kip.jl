@@ -1,5 +1,5 @@
 install:
-	ln -fs $$PWD `julia -e 'print(Pkg.dir("Kip"))'`
+	@julia --startup-file=no -e 'symlink(pwd(), Pkg.dir("Kip"))'
 
 test:
 	julia test.jl
