@@ -26,7 +26,7 @@ function GET(url; meta=Dict())
   end
 end
 
-parseJSON(data::Vector{UInt8}) = JSON.parse(bytestring(data))
+parseJSON(data::Vector{UInt8}) = JSON.parse(String(data))
 
 ##
 # Run Julia's conventional install hook
@@ -104,7 +104,7 @@ end
 function isregistered(username::AbstractString, pkgname::AbstractString)
   # same name as a registered module
   ispath(Pkg.dir("METADATA", pkgname)) || return false
-  url = readall(Pkg.dir("METADATA", pkgname, "url"))
+  url = readstring(Pkg.dir("METADATA", pkgname, "url"))
   m = match(r"github.com/([^/]+)/([^/.]+)", url).captures
   # is a registered module
   username == m[1] && pkgname == m[2]
@@ -168,11 +168,11 @@ end
 # Require `path` relative to `base`
 #
 function require(path::AbstractString, base::AbstractString; locals...)
-  name = symbol(realpath(resolve(path, base)))
+  name = Symbol(realpath(resolve(path, base)))
   if !isdefined(Main, name)
     eval(Main, :(const $name = $(eval_module(name; locals...))))
   end
-  Main.(name)
+  getfield(Main, name)
 end
 
 function eval_module(name::Symbol; locals...)
@@ -181,7 +181,7 @@ function eval_module(name::Symbol; locals...)
 
   # if installed in native location then load it using native system
   if startswith(path, Pkg.dir())
-    name = symbol(split(replace(path, Pkg.dir(), ""), '/', keep=false)[1])
+    name = Symbol(split(replace(path, Pkg.dir(), ""), '/', keep=false)[1])
     return eval(:(import $name; $name))
   end
 
@@ -251,7 +251,7 @@ macro require(path, names...)
   # @require "path" ...
   else
     isempty(names) && return :(require($path))
-    name = symbol(path)
+    name = Symbol(path)
   end
   ast = :(const $name = require($path))
   isempty(names) && return ast
@@ -270,7 +270,7 @@ macro require(path, names...)
         append!(names, filter(n -> n != mn, Base.names(m)))
       else
         # support renaming variables as they are imported
-        @assert n.head == symbol("=>")
+        @assert n.head == Symbol("=>")
         push!(ast.args, :(const $(esc(n.args[2])) = $name.$(n.args[1])))
       end
     else
