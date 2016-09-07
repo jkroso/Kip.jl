@@ -129,7 +129,13 @@ Can be set using `Kip.eval(:(entry = "/some/path"))`
 """
 
 function __init__()
-  global entry = pwd()
+  # If we are running a file and not at the REPL
+  if !isinteractive() && !isempty(ARGS)
+    # set Kip.entry to the dirname of the file being run
+    global entry = dirname(realpath(joinpath(pwd(), ARGS[1])))
+  else
+    global entry = pwd()
+  end
 end
 
 """

@@ -4,27 +4,21 @@ Kip is an alternative module system for Julia with the goal of being more robust
 
 ## Installation
 
-```sh
-git clone https://github.com/jkroso/Kip.jl.git kip
-ln -fs `realpath kip` `julia -e 'print(Pkg.dir("Kip"))'`
+```julia
+Pkg.clone("https://github.com/jkroso/Kip.jl.git")
 ```
 
 Then add this code to your ~/.juliarc.jl
 
 ```julia
 using Kip
-# If we are running a file and not at the REPL
-if !isinteractive() && !isempty(ARGS)
-  # set Kip.entry to the dirname of the file being run
-  Kip.eval(:(entry=$(dirname(realpath(joinpath(pwd(), ARGS[1]))))))
-end
 ```
 
 Now it's like Kip was built into Julia. It will be available at the REPL and in any files you run
 
 ## API
 
-Kip's API consists of just two macros and to get started you only need to know the first one.
+Kip's API consists of just one macro to import modules. And one function to update all the 3rd party repositories you use
 
 ### `@require(pkg::String, imports::Symbol...)`
 
@@ -39,9 +33,9 @@ There are a couple other types of paths you can pass to `@require`:
 
   This syntax is actually pretty complex since it also needs to enable you to specify which ref (tag/commit/branch) you want to use. Here I haven't specified a ref so it uses the latest commit. If I want to specify one I put it after the reponame prefixed with an "@". e.g: `@require "github.com/jkroso/thing@1"` This looks like a semver query so it will be run over all tags in the repo and the latest tag that matches the query is the one that gets used. Finally, if the module we want from the repository isn't called "main.jl", or "src/$(reponame).jl" then we will need to specify its path. e.g: `@require "github.com/jkroso/thing@1/thing"`. And path completion will also be applied just like with relative and absolute paths.
 
-### `@dirname()`
+### `update()`
 
-`@dirname` is the other macro in Kip's API. It just returns the `dirname` of the file currently being run. Or if we are at the REPL it returns `pwd()`. You won't use it often but when you do you will be glad its there.
+Runs `git fetch` on all the repositories you have `@require`'d in the past. So that next time you `@require` them you will get the latest version
 
 ### Native Julia module support
 
@@ -81,7 +75,3 @@ While at the REPL it could listen to changes on the modules you require and auto
 ##### Dependency tree linting
 
 Kips ability to load multiple versions of a module at the same time is a double edged sword. The upside is package developers can make breaking changes to their API's without instantly breaking all their dependent projects. The downside is that if you and your dependencies have dependencies in common and they load different versions of these modules to you then you might run into issues if you passing Type instances back and fourth between your direct dependencies. This is a subtle problem which can be hard to recognize. Especially if you not aware that it can happen. A good solution to this might be to use a static analysis tool to check your dependency tree for potential instances of this problem. It would make sense to make it part of a [linting tool](//github.com/tonyhffong/Lint.jl).
-
-##### Offline mode
-
-Kip currently updates all dependencies every time a file is run. This slows down startup time significantly. It would be nice to have a local mode which only downloads new dependencies and just assumes old ones are still up to date.
