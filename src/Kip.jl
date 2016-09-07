@@ -6,6 +6,8 @@ include("./deps.jl")
 
 const home = joinpath(homedir(), ".kip")
 
+const absolute_path = r"^/"
+const relative_path = r"^\.{1,2}"
 const gh_shorthand = r"
   ^github.com/  # all github paths start the same way
   ([\w-.]+)     # username
@@ -15,7 +17,6 @@ const gh_shorthand = r"
   (?:/(.+))?    # path to the module inside the repo (optional)
   $
 "x
-const relative_path = r"^\.{1,2}"
 
 ##
 # Run Julia's conventional install hook
@@ -31,34 +32,23 @@ end
 # Try some sensible defaults if `path` doesn't already refer to
 # a file
 #
-function complete(path::AbstractString)
-  for p in (path, path * ".jl", joinpath(path, "main.jl"))
-    isfile(p) && return p
+function complete(path::AbstractString, pkgname::AbstractString=basename(path))
+  for p in (path,
+            path * ".jl",
+            joinpath(path, "main.jl"),
+            # "src/$(module_name).jl". A Julia convention
+            replace(joinpath(path, "src", pkgname), r"(\.jl)?$", ".jl"))
+    isfile(p) && return (realpath(p), pkgname)
   end
 
-  # check "src/$(module_name).jl". A preexisting Julia convention
-  legacy = joinpath(path, "src", reponame(path))
-  # ensure the path ends in a ".jl"
-  legacy = replace(legacy, r"(\.jl)?$", ".jl")
-  ispath(legacy) && return legacy
-
   error("$path can not be completed to a file")
-end
-
-##
-# Take a guess at what the module must be called
-#
-function reponame(path)
-  m = match(r"github\.com/[^/]+/([^/]+)", path)
-  m == nothing || return m[1]
-  return basename(path)
 end
 
 ##
 # Resolve a require call to an absolute file path
 #
 function resolve(path::AbstractString, base::AbstractString)
-  path[1] == '/' && return complete(path)
+  ismatch(absolute_path, path) && return complete(path)
   ismatch(relative_path, path) && return complete(joinpath(base, path))
   m = match(gh_shorthand, path)
   @assert m != nothing  "unable to resolve '$path'"
@@ -67,12 +57,12 @@ function resolve(path::AbstractString, base::AbstractString)
   if isregistered(username, pkgname)
     path = Pkg.dir(pkgname)
     ispath(path) || Pkg.add(pkgname)
-    return complete(path)
+    return complete(path, pkgname)
   end
   package = resolve_github(path)
-  path = subpath ≡ nothing ? package : joinpath(package, subpath)
   build(package)
-  complete(path)
+  path = subpath ≡ nothing ? package : joinpath(package, subpath)
+  complete(path, pkgname)
 end
 
 function resolve_github(url::AbstractString)
@@ -134,7 +124,7 @@ Get the directory the current file is stored in. If your in the REPL
 it will just return `entry`
 """
 macro dirname()
-  :(current_module() === Main ? entry : dirname(string(current_module())))
+  :(current_module() === Main ? entry : Base.source_dir())
 end
 
 ##
@@ -144,26 +134,26 @@ function require(path::AbstractString; locals...)
   require(path, @dirname; locals...)
 end
 
+const modules = Dict{String,Module}()
+
 ##
 # Require `path` relative to `base`
 #
 function require(path::AbstractString, base::AbstractString; locals...)
-  name = Symbol(realpath(resolve(path, base)))
-  if !isdefined(Main, name)
-    eval(Main, :(const $name = $(eval_module(name; locals...))))
+  path, pkgname = resolve(path, base)
+  get!(modules, path) do
+    eval_module(Symbol(pkgname), path; locals...)
   end
-  getfield(Main, name)
 end
 
-function eval_module(name::Symbol; locals...)
-  path = string(name)
-  mod = Module(name)
-
+function eval_module(name::Symbol, path::AbstractString; locals...)
   # if installed in native location then load it using native system
   if startswith(path, Pkg.dir())
     name = Symbol(split(replace(path, Pkg.dir(), ""), '/', keep=false)[1])
     return eval(:(import $name; $name))
   end
+
+  mod = Module(name)
 
   eval(mod, quote
     using Kip
@@ -175,8 +165,8 @@ function eval_module(name::Symbol; locals...)
 
   # unpack the submodule if thats all thats in it. For unregistered native modules
   locals = filter(n -> n != name && n != :eval, names(mod, true))
-  if length(locals) == 1 && isa(mod.(locals[1]), Module)
-    return mod.(locals[1])
+  if length(locals) == 1 && isa(getfield(mod, locals[1]), Module)
+    return getfield(mod, locals[1])
   end
 
   return mod
