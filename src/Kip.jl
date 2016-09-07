@@ -5,6 +5,8 @@ module Kip # start of module
 include("./deps.jl")
 
 const home = joinpath(homedir(), ".kip")
+const repos = joinpath(home, "repos")
+const refs = joinpath(home, "refs")
 
 const absolute_path = r"^/"
 const relative_path = r"^\.{1,2}"
@@ -17,6 +19,17 @@ const gh_shorthand = r"
   (?:/(.+))?    # path to the module inside the repo (optional)
   $
 "x
+
+"""
+Update all 3rd party repositories
+"""
+update() =
+  for user in readdir(repos)
+    user = joinpath(repos, user)
+    for reponame in readdir(user)
+      LibGit2.fetch(LibGit2.GitRepo(joinpath(user, reponame)))
+    end
+  end
 
 ##
 # Run Julia's conventional install hook
@@ -67,7 +80,7 @@ end
 
 function resolve_github(url::AbstractString)
   user,reponame,tag = match(gh_shorthand, url).captures
-  localpath = joinpath(home, "repos", user, reponame)
+  localpath = joinpath(repos, user, reponame)
   repo = if isdir(localpath)
     LibGit2.GitRepo(localpath)
   else
@@ -87,7 +100,7 @@ function resolve_github(url::AbstractString)
   end
 
   # make a copy of the repository in its current state
-  dest = joinpath(home, "refs", user, reponame, string(LibGit2.head_oid(repo)))
+  dest = joinpath(refs, user, reponame, string(LibGit2.head_oid(repo)))
   isdir(dest) || snapshot_repo(localpath, dest)
   dest
 end
