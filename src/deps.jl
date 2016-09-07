@@ -75,12 +75,16 @@ Base.ismatch(q::Conjunction, v::VersionNumber) = all(q-> ismatch(q, v), q.querie
 #
 Base.findmax(q::VersionQuery, enumerable) = begin
   best_v = typemin(VersionNumber)
+  best_i = 0
+  i = 0
   for v in enumerable
+    i += 1
     if ismatch(q, v) && v > best_v
       best_v = v
+      best_i = i
     end
   end
-  return best_v
+  return best_v, best_i
 end
 
 ##

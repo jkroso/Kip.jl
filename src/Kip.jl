@@ -2,9 +2,9 @@ __precompile__(true)
 
 module Kip # start of module
 
-import Requests
-import JSON
 include("./deps.jl")
+
+const home = joinpath(homedir(), ".kip")
 
 const gh_shorthand = r"
   ^github.com/  # all github paths start the same way
@@ -16,17 +16,6 @@ const gh_shorthand = r"
   $
 "x
 const relative_path = r"^\.{1,2}"
-
-function GET(url; meta=Dict())
-  response = Requests.get(encode(url); headers=meta)
-  if response.status >= 400
-    error("status $(response.status) for $(encode(url))")
-  else
-    response.data
-  end
-end
-
-parseJSON(data::Vector{UInt8}) = JSON.parse(String(data))
 
 ##
 # Run Julia's conventional install hook
@@ -66,21 +55,6 @@ function reponame(path)
 end
 
 ##
-# Download a package and return its local location
-#
-function download(url::AbstractString)
-  name = joinpath(homedir(), ".kip", replace(url, r"^.*://", ""))
-  if !ispath(name)
-    mkpath(name)
-    stdin, proc = open(`tar --strip-components 1 -xmpzf - -C $name`, "w")
-    write(stdin, GET(url))
-    close(stdin)
-    wait(proc)
-  end
-  return name
-end
-
-##
 # Resolve a require call to an absolute file path
 #
 function resolve(path::AbstractString, base::AbstractString)
@@ -88,17 +62,51 @@ function resolve(path::AbstractString, base::AbstractString)
   ismatch(relative_path, path) && return complete(joinpath(base, path))
   m = match(gh_shorthand, path)
   @assert m != nothing  "unable to resolve '$path'"
-  username, reponame = m.captures
+  username,reponame,tag,subpath = m.captures
   pkgname = replace(reponame, r"\.jl$", "")
   if isregistered(username, pkgname)
-    ispath(Pkg.dir(pkgname)) || Pkg.add(pkgname)
-    return Pkg.dir(pkgname) |> complete
+    path = Pkg.dir(pkgname)
+    ispath(path) || Pkg.add(pkgname)
+    return complete(path)
   end
-  url,path = resolve_gh(path)
-  package = download(url)
-  path = isempty(path) ? package : joinpath(package, path)
+  package = resolve_github(path)
+  path = subpath ≡ nothing ? package : joinpath(package, subpath)
   build(package)
   complete(path)
+end
+
+function resolve_github(url::AbstractString)
+  user,reponame,tag = match(gh_shorthand, url).captures
+  localpath = joinpath(home, "repos", user, reponame)
+  repo = if isdir(localpath)
+    LibGit2.GitRepo(localpath)
+  else
+    LibGit2.clone("https://github.com/$user/$reponame.git", localpath)
+  end
+
+  # checkout the specified tag/branch/commit
+  if tag ≡ nothing
+    LibGit2.checkout!(repo, LibGit2.revparseid(repo, "master") |> string)
+  elseif ismatch(semver_regex, tag)
+    tags = LibGit2.tag_list(repo)
+    v,idx = findmax(semver_query(tag), VersionNumber(t) for t in tags)
+    @assert idx > 0 "$user/$reponame has no tag matching $tag. Try again after running Kip.update()"
+    LibGit2.checkout!(repo, LibGit2.revparseid(repo, tags[idx]) |> string)
+  else
+    LibGit2.checkout!(repo, LibGit2.revparseid(repo, tag) |> string)
+  end
+
+  # make a copy of the repository in its current state
+  dest = joinpath(home, "refs", user, reponame, string(LibGit2.head_oid(repo)))
+  isdir(dest) || snapshot_repo(localpath, dest)
+  dest
+end
+
+function snapshot_repo(src, dest)
+  mkpath(dest)
+  for name in readdir(src)
+    name != ".git" && cp(joinpath(src, name), joinpath(dest, name))
+  end
 end
 
 function isregistered(username::AbstractString, pkgname::AbstractString)
@@ -108,34 +116,6 @@ function isregistered(username::AbstractString, pkgname::AbstractString)
   m = match(r"github.com/([^/]+)/([^/.]+)", url).captures
   # is a registered module
   username == m[1] && pkgname == m[2]
-end
-
-function resolve_gh(dep::AbstractString)
-  user,repo,tag,path = match(gh_shorthand, dep).captures
-  if tag ≡ nothing
-    tag = latest_gh_commit(user, repo)[1:7]
-  elseif ismatch(semver_regex, tag)
-    tag = resolve_gh_tag(user, repo, tag)
-  end
-  ("http://github.com/$user/$repo/tarball/$tag", path ≡ nothing ? "" : path)
-end
-
-const username = get(ENV, "GITHUB_USERNAME", "")
-const password = get(ENV, "GITHUB_PASSWORD", "")
-const headers = Dict{String,String}()
-
-if !isempty(username) && !isempty(password)
-  headers["Authorization"] = "Basic " * base64encode(string(username, ':', password))
-end
-
-function latest_gh_commit(user::AbstractString, repo::AbstractString)
-  url = "https://api.github.com/repos/$user/$repo/git/refs/heads/master"
-  parseJSON(GET(url; meta=headers))["object"]["sha"]
-end
-
-function resolve_gh_tag(user, repo, tag)
-  tags = GET("https://api.github.com/repos/$user/$repo/tags"; meta=headers) |> parseJSON
-  findmax(semver_query(tag), VersionNumber[t["name"] for t in tags])
 end
 
 """
