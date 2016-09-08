@@ -45,7 +45,7 @@ end
 # Try some sensible defaults if `path` doesn't already refer to
 # a file
 #
-function complete(path::AbstractString, pkgname::AbstractString=basename(path))
+function complete(path::AbstractString, pkgname::AbstractString=splitext(basename(path))[1])
   for p in (path,
             path * ".jl",
             joinpath(path, "main.jl"),
@@ -66,7 +66,7 @@ function resolve(path::AbstractString, base::AbstractString)
   m = match(gh_shorthand, path)
   @assert m != nothing  "unable to resolve '$path'"
   username,reponame,tag,subpath = m.captures
-  pkgname = replace(reponame, r"\.jl$", "")
+  pkgname = splitext(reponame)[1]
   if isregistered(username, pkgname)
     path = Pkg.dir(pkgname)
     ispath(path) || Pkg.add(pkgname)
