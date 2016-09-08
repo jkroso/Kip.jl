@@ -27,7 +27,7 @@ update() =
   for user in readdir(repos)
     user = joinpath(repos, user)
     for reponame in readdir(user)
-      LibGit2.fetch(LibGit2.GitRepo(joinpath(user, reponame)))
+      LibGit2.fetch(LibGit2.GitRepo(joinpath(user, reponame)), refspecs=["master"])
     end
   end
 
