@@ -183,7 +183,7 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
   end)
 
   # unpack the submodule if thats all thats in it. For unregistered native modules
-  locals = filter(n -> n != name && n != :eval, names(mod, true))
+  locals = filter(n -> n != :eval && n != Symbol("#eval"), names(mod, true))
   if length(locals) == 1 && isa(getfield(mod, locals[1]), Module)
     return getfield(mod, locals[1])
   end
