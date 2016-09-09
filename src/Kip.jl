@@ -43,15 +43,16 @@ function build(pkg::AbstractString)
 end
 build() = run(`julia build.jl`)
 
+pkgname(path::AbstractString) = basename(isdirpath(path) ? dirname(path) : splitext(path)[1])
+
 ##
 # Try some sensible defaults if `path` doesn't already refer to
 # a file
 #
-function complete(path::AbstractString, pkgname::AbstractString=splitext(basename(path))[1])
+function complete(path::AbstractString, pkgname::AbstractString=pkgname(path))
   for p in (path,
             path * ".jl",
             joinpath(path, "main.jl"),
-            # "src/$(module_name).jl". A Julia convention
             joinpath(path, "src", pkgname * ".jl"))
     isfile(p) && return (realpath(p), pkgname)
   end
@@ -64,7 +65,7 @@ end
 #
 function resolve(path::AbstractString, base::AbstractString)
   ismatch(absolute_path, path) && return complete(path)
-  ismatch(relative_path, path) && return complete(joinpath(base, path) |> normpath)
+  ismatch(relative_path, path) && return complete(normpath(base, path))
   m = match(gh_shorthand, path)
   @assert m != nothing  "unable to resolve '$path'"
   username,reponame,tag,subpath = m.captures
