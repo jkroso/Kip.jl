@@ -64,7 +64,7 @@ end
 #
 function resolve(path::AbstractString, base::AbstractString)
   ismatch(absolute_path, path) && return complete(path)
-  ismatch(relative_path, path) && return complete(joinpath(base, path) |> realpath)
+  ismatch(relative_path, path) && return complete(joinpath(base, path) |> normpath)
   m = match(gh_shorthand, path)
   @assert m != nothing  "unable to resolve '$path'"
   username,reponame,tag,subpath = m.captures
