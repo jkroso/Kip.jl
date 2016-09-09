@@ -27,7 +27,10 @@ update() =
   for user in readdir(repos)
     user = joinpath(repos, user)
     for reponame in readdir(user)
-      LibGit2.fetch(LibGit2.GitRepo(joinpath(user, reponame)), refspecs=["master"])
+      repo = LibGit2.GitRepo(joinpath(user, reponame))
+      LibGit2.branch!(repo, "master", track=LibGit2.Consts.REMOTE_ORIGIN)
+      LibGit2.fetch(repo)
+      LibGit2.merge!(repo, fastforward=true)
     end
   end
 
@@ -50,7 +53,7 @@ function complete(path::AbstractString, pkgname::AbstractString=splitext(basenam
             path * ".jl",
             joinpath(path, "main.jl"),
             # "src/$(module_name).jl". A Julia convention
-            replace(joinpath(path, "src", pkgname), r"(\.jl)?$", ".jl"))
+            joinpath(path, "src", pkgname * ".jl"))
     isfile(p) && return (realpath(p), pkgname)
   end
 
@@ -89,7 +92,7 @@ function resolve_github(url::AbstractString)
 
   # checkout the specified tag/branch/commit
   if tag ≡ nothing
-    LibGit2.checkout!(repo, LibGit2.revparseid(repo, "master") |> string)
+    LibGit2.branch!(repo, "master", track=LibGit2.Consts.REMOTE_ORIGIN)
   elseif ismatch(semver_regex, tag)
     tags = LibGit2.tag_list(repo)
     v,idx = findmax(semver_query(tag), VersionNumber(t) for t in tags)
