@@ -39,10 +39,9 @@ update() =
 #
 function build(pkg::AbstractString)
   deps = joinpath(pkg, "deps")
-  isdir(deps) && cd(deps) do
-    run(`julia build.jl`)
-  end
+  isdir(deps) && isfile(joinpath(deps, "build.jl")) && cd(build, deps)
 end
+build() = run(`julia build.jl`)
 
 ##
 # Try some sensible defaults if `path` doesn't already refer to
