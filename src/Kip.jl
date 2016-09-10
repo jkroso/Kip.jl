@@ -25,12 +25,16 @@ Update all 3rd party repositories
 """
 update() =
   for user in readdir(repos)
-    user = joinpath(repos, user)
-    for reponame in readdir(user)
-      repo = LibGit2.GitRepo(joinpath(user, reponame))
-      LibGit2.branch!(repo, "master", track=LibGit2.Consts.REMOTE_ORIGIN)
-      LibGit2.fetch(repo)
-      LibGit2.merge!(repo, fastforward=true)
+    userdir = joinpath(repos, user)
+    for reponame in readdir(userdir)
+      try
+        repo = LibGit2.GitRepo(joinpath(userdir, reponame))
+        LibGit2.branch!(repo, "master", track=LibGit2.Consts.REMOTE_ORIGIN)
+        LibGit2.fetch(repo)
+        LibGit2.merge!(repo, fastforward=true)
+      catch
+        warn("unable to update $user/$reponame")
+      end
     end
   end
 
