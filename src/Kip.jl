@@ -47,7 +47,8 @@ function build(pkg::AbstractString)
 end
 build() = run(`julia build.jl`)
 
-pkgname(path::AbstractString) = basename(isdirpath(path) ? dirname(path) : splitext(path)[1])
+pkgname(path::AbstractString) =
+  splitext(basename(isdirpath(path) ? dirname(path) : splitext(path)[1]))[1]
 
 ##
 # Try some sensible defaults if `path` doesn't already refer to
