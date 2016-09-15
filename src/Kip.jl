@@ -29,7 +29,7 @@ update() =
     for reponame in readdir(userdir)
       try
         repo = LibGit2.GitRepo(joinpath(userdir, reponame))
-        LibGit2.branch!(repo, "master", track=LibGit2.Consts.REMOTE_ORIGIN)
+        LibGit2.branch!(repo, "master")
         LibGit2.fetch(repo)
         LibGit2.merge!(repo, fastforward=true)
       catch
@@ -97,14 +97,16 @@ function resolve_github(url::AbstractString)
 
   # checkout the specified tag/branch/commit
   if tag ≡ nothing
-    LibGit2.branch!(repo, "master", track=LibGit2.Consts.REMOTE_ORIGIN)
+    LibGit2.branch!(repo, "master")
   elseif ismatch(semver_regex, tag)
     tags = LibGit2.tag_list(repo)
     v,idx = findmax(semver_query(tag), VersionNumber(t) for t in tags)
     @assert idx > 0 "$user/$reponame has no tag matching $tag. Try again after running Kip.update()"
     LibGit2.checkout!(repo, LibGit2.revparseid(repo, tags[idx]) |> string)
   else
-    LibGit2.checkout!(repo, LibGit2.revparseid(repo, tag) |> string)
+    branch = LibGit2.lookup_branch(repo, tag)
+    @assert branch != nothing "$localpath has no branch $tag"
+    LibGit2.branch!(repo, tag)
   end
 
   # make a copy of the repository in its current state
