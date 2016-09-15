@@ -178,27 +178,25 @@ end
 function eval_module(name::Symbol, path::AbstractString; locals...)
   # if installed in native location then load it using native system
   if startswith(path, Pkg.dir())
-    name = Symbol(split(replace(path, Pkg.dir(), ""), '/', keep=false)[1])
     return eval(:(import $name; $name))
   end
 
-  mod = Module(name)
+  mod = Module(gensym(name))
 
   eval(mod, quote
     using Kip
-    eval(x) = Core.eval($name, x)
+    eval(x) = Core.eval($mod, x)
     eval(m, x) = Core.eval(m, x)
     $([:(const $k = $v) for (k,v) in locals]...)
     include($path)
   end)
 
   # unpack the submodule if thats all thats in it. For unregistered native modules
-  locals = filter(n -> n != :eval && n != Symbol("#eval"), names(mod, true))
-  if length(locals) == 1 && isa(getfield(mod, locals[1]), Module)
-    return getfield(mod, locals[1])
+  if isdefined(mod, name) && isa(getfield(mod, name), Module)
+    getfield(mod, name)
+  else
+    mod
   end
-
-  return mod
 end
 
 """
