@@ -183,13 +183,12 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
 
   mod = Module(gensym(name))
 
-  eval(mod, quote
-    using Kip
-    eval(x) = Core.eval($mod, x)
-    eval(m, x) = Core.eval(m, x)
-    $([:(const $k = $v) for (k,v) in locals]...)
-    include($path)
-  end)
+  eval(mod, Expr(:toplevel,
+                 :(using Kip),
+                 :(eval(x) = Main.Core.eval($mod, x)),
+                 :(eval(m, x) = Main.Core.eval(m, x)),
+                 [:(const $k = $v) for (k,v) in locals]...,
+                 :(Main.Base.include($path))))
 
   # unpack the submodule if thats all thats in it. For unregistered native modules
   if isdefined(mod, name) && isa(getfield(mod, name), Module)
