@@ -132,28 +132,11 @@ function isregistered(username::AbstractString, pkgname::AbstractString)
 end
 
 """
-The directory the application is located in. If your running `julia /some/file.jl`
-then `entry`  should be set to `"/some"`
-
-Can be set using `Kip.eval(:(entry = "/some/path"))`
-"""
-
-function __init__()
-  # If we are running a file and not at the REPL
-  if !isinteractive() && !isempty(ARGS)
-    # set Kip.entry to the dirname of the file being run
-    global entry = dirname(realpath(joinpath(pwd(), ARGS[1])))
-  else
-    global entry = pwd()
-  end
-end
-
-"""
 Get the directory the current file is stored in. If your in the REPL
-it will just return `entry`
+it will just return `pwd()`
 """
 macro dirname()
-  :(current_module() === Main ? entry : Base.source_dir())
+  :(isinteractive() ? pwd() : Base.source_dir())
 end
 
 ##
