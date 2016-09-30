@@ -136,7 +136,7 @@ Get the directory the current file is stored in. If your in the REPL
 it will just return `pwd()`
 """
 macro dirname()
-  :(isinteractive() ? pwd() : Base.source_dir())
+  isinteractive() && current_module() ≡ Main ? :(pwd()) : :(Base.source_dir())
 end
 
 ##
@@ -164,8 +164,7 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
     return eval(:(import $name; $name))
   end
 
-  exprs = parse_file(path)
-  safename = any(x->uses(name, x), exprs) ? gensym(name) : name
+  safename = any(x->uses(name, x), parse_file(path)) ? gensym(name) : name
   mod = Module(safename)
 
   eval(mod, Expr(:toplevel,
@@ -173,7 +172,7 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
                  :(eval(x) = Main.Core.eval($mod, x)),
                  :(eval(m, x) = Main.Core.eval(m, x)),
                  [:(const $k = $v) for (k,v) in locals]...,
-                 exprs...))
+                 :(include($path))))
 
   # unpack the submodule if thats all thats in it. For unregistered native modules
   if isdefined(mod, name) && isa(getfield(mod, name), Module)
