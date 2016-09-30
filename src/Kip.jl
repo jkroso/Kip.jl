@@ -164,14 +164,16 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
     return eval(:(import $name; $name))
   end
 
-  mod = Module(gensym(name))
+  exprs = parse_file(path)
+  safename = any(x->uses(name, x), exprs) ? gensym(name) : name
+  mod = Module(safename)
 
   eval(mod, Expr(:toplevel,
                  :(using Kip),
                  :(eval(x) = Main.Core.eval($mod, x)),
                  :(eval(m, x) = Main.Core.eval(m, x)),
                  [:(const $k = $v) for (k,v) in locals]...,
-                 :(Main.Base.include($path))))
+                 exprs...))
 
   # unpack the submodule if thats all thats in it. For unregistered native modules
   if isdefined(mod, name) && isa(getfield(mod, name), Module)
@@ -179,6 +181,21 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
   else
     mod
   end
+end
+
+uses(s::Symbol, e::Expr) = any(x->uses(s,x), e.args)
+uses(s::Symbol, e::Symbol) = e == s
+uses(s::Symbol, e::Any) = false
+
+function parse_file(filename)
+  str = readstring(filename)
+  exprs = Any[]
+  pos = 1
+  while pos <= endof(str)
+    ex, pos = parse(str, pos)
+    push!(exprs, ex)
+  end
+  return exprs
 end
 
 """
