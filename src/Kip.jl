@@ -164,7 +164,11 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
     return eval(:(import $name; $name))
   end
 
-  safename = any(x->uses(name, x), parse_file(path)) ? gensym(name) : name
+  safename = name
+  code = parse_file(path)
+  while any(x->uses(safename, x), code)
+    safename = Symbol(safename, :s)
+  end
   mod = Module(safename)
 
   eval(mod, Expr(:toplevel,
