@@ -136,7 +136,7 @@ Get the directory the current file is stored in. If your in the REPL
 it will just return `pwd()`
 """
 macro dirname()
-  :(isinteractive() && current_module() ≡ Main ? pwd() : Base.source_dir())
+  :(Base.source_dir() ≡ nothing ? pwd() : Base.source_dir())
 end
 
 ##
