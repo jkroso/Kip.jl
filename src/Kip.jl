@@ -136,7 +136,7 @@ Get the directory the current file is stored in. If your in the REPL
 it will just return `pwd()`
 """
 macro dirname()
-  :(Base.source_path() ≡ nothing ? entry_path() : dirname(realpath(Base.source_path())))
+  :(Base.source_path() ∈ ["" nothing] ? entry_path() : dirname(realpath(Base.source_path())))
 end
 
 function entry_path()
