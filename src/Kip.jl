@@ -171,7 +171,11 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
   safename = name
   code = parse_file(path)
   while any(x->uses(safename, x), code)
-    safename = Symbol(safename, :s)
+    if endswith(string(safename), 's')
+      safename = Symbol('#', safename)
+    else
+      safename = Symbol(safename, :s)
+    end
   end
   mod = Module(safename)
 
