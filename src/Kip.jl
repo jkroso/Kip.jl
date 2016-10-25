@@ -171,16 +171,8 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
     return eval(:(import $name; $name))
   end
 
-  safename = name
-  code = parse_file(path)
-  while any(x->uses(safename, x), code)
-    if endswith(string(safename), 's')
-      safename = Symbol('#', safename)
-    else
-      safename = Symbol(safename, :s)
-    end
-  end
-  mod = Module(safename)
+  # prefix with a ⭒ to avoid clashing with variables inside the module
+  mod = Module(Symbol(:⭒, name))
 
   eval(mod, Expr(:toplevel,
                  :(using Kip),
@@ -195,21 +187,6 @@ function eval_module(name::Symbol, path::AbstractString; locals...)
   else
     mod
   end
-end
-
-uses(s::Symbol, e::Expr) = any(x->uses(s,x), e.args)
-uses(s::Symbol, e::Symbol) = e == s
-uses(s::Symbol, e::Any) = false
-
-function parse_file(filename)
-  str = readstring(filename)
-  exprs = Any[]
-  pos = 1
-  while pos <= endof(str)
-    ex, pos = parse(str, pos)
-    push!(exprs, ex)
-  end
-  return exprs
 end
 
 """
