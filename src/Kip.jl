@@ -82,8 +82,11 @@ function resolve(path::AbstractString, base::AbstractString)
   end
   package = resolve_github(path)
   build(package)
-  path = subpath ≡ nothing ? package : joinpath(package, subpath)
-  complete(path, pkgname)
+  if subpath ≡ nothing
+    complete(package, pkgname)
+  else
+    complete(joinpath(package, subpath))
+  end
 end
 
 function resolve_github(url::AbstractString)
