@@ -73,6 +73,14 @@ target_path(pkg) = begin
   joinpath(repos, name)
 end
 
+"""
+Convert a `spec` used in a `@requrie` call to its local storage location
+"""
+local_repo(spec::String) = begin
+  user,reponame = match(gh_shorthand, spec).captures
+  joinpath(repos, user, reponame)|>realpath
+end
+
 ##
 # Run Julia's conventional install hook
 #
