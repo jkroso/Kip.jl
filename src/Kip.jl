@@ -75,9 +75,9 @@ target_path(pkg) = begin
 end
 
 """
-Convert a `spec` used in a `@requrie` call to its local storage location
+Convert a `spec` used in a `@require` call to its local storage location
 """
-local_repo(spec::String) = begin
+dir(spec::String) = begin
   user,reponame = match(gh_shorthand, spec).captures
   joinpath(repos, user, reponame)|>realpath
 end
