@@ -1,3 +1,2 @@
-julia v0.4
-Requests
-JSON
+julia v0.5
+ProgressMeter

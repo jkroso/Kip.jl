@@ -1,6 +1,7 @@
 __precompile__(true)
 
 module Kip # start of module
+using ProgressMeter
 
 include("./deps.jl")
 
@@ -24,19 +25,24 @@ const gh_shorthand = r"
 Update all 3rd party repositories
 """
 update() =
-  for user in readdir(repos)
-    userdir = joinpath(repos, user)
-    for reponame in readdir(userdir)
-      try
-        repo = LibGit2.GitRepo(joinpath(userdir, reponame))
-        LibGit2.branch!(repo, "master")
-        LibGit2.fetch(repo)
-        LibGit2.merge!(repo, fastforward=true)
-      catch
-        warn("unable to update $user/$reponame")
-      end
+  @showprogress "Updating packages..." for repopath in gitrepos(repos)
+    try
+      repo = LibGit2.GitRepo(repopath)
+      LibGit2.branch!(repo, "master")
+      LibGit2.fetch(repo)
+      LibGit2.merge!(repo, fastforward=true)
+    catch
+      warn("unable to update $repopath")
     end
   end
+
+isrepo(dir) = isdir(joinpath(dir, ".git"))
+
+gitrepos(dir) = begin
+  isrepo(dir) && return [dir]
+  children = filter(isdir, map(n->joinpath(dir,n), readdir(dir)))
+  reduce(append!, [], map(gitrepos, children))
+end
 
 ##
 # Run Julia's conventional install hook
