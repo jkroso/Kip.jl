@@ -44,6 +44,35 @@ gitrepos(dir) = begin
   reduce(append!, [], map(gitrepos, children))
 end
 
+"""
+symlink a package which you are developing locally so that it can be
+`@require`d as if it was remote. This just save you running `Kip.update()`
+all the time
+"""
+link(pkg=pwd()) = begin
+  pkg = realpath(pkg)
+  from = target_path(pkg)
+  from|>dirname|>mkpath
+  isdir(from) && rm(from, recursive=true)
+  islink(from) || symlink(pkg, from)
+end
+
+"""
+Remove a symlink created by `link()`
+"""
+unlink(pkg=pwd()) = begin
+  from = target_path(pkg)
+  islink(from) && rm(from)
+end
+
+target_path(pkg) = begin
+  repo = LibGit2.GitRepo(pkg)
+  remote = LibGit2.remotes(repo)[1]
+  url = LibGit2.get(LibGit2.GitRemote, repo, remote)|>LibGit2.url
+  name = match(r"github.com/([\w-.]+/[\w-.]+)\.git", url)[1]
+  joinpath(repos, name)
+end
+
 ##
 # Run Julia's conventional install hook
 #
