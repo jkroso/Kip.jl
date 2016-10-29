@@ -54,7 +54,7 @@ link(pkg=pwd()) = begin
   from = target_path(pkg)
   from|>dirname|>mkpath
   isdir(from) && rm(from, recursive=true)
-  islink(from) || rm(from)
+  islink(from) && rm(from)
   symlink(pkg, from)
 end
 
