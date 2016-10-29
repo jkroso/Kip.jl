@@ -142,6 +142,9 @@ function resolve_github(url::AbstractString)
     LibGit2.clone("https://github.com/$user/$reponame.git", localpath)
   end
 
+  # Can't do anything with a dirty repo so we have to use it as is
+  LibGit2.isdirty(repo) && return localpath
+
   # checkout the specified tag/branch/commit
   if tag ≡ nothing
     LibGit2.branch!(repo, "master")
