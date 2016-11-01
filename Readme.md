@@ -1,6 +1,6 @@
 # Kip
 
-Kip is an alternative module system for Julia with the goal of being more robust and easier to use. With Kip __packages don't have names__. Instead modules are identified by the file they are in. So you can have several versions of the same package without them overwriting each other. Also it favors putting __dependency info inline__ rather than in a REQUIRE file. This reduces indirection and works well at the REPL. The final key difference is that it __installs dependencies at runtime__. So users never think about installing or updating their packages.
+Kip is an alternative module system for Julia with the goal of being more robust and easier to use. With Kip __packages don't have names__. Instead modules are identified by the file they are in. So you can have several versions of the same package without them overwriting each other. Also it favors putting __dependency info inline__ rather than in a REQUIRE file. This reduces indirection and works well at the REPL. The final key difference is that it __installs dependencies at runtime__. So you never have to think about if a package is installed or not. Though you should run `Kip.update()` occasionally to update Kip's local cache of packages which are just plain Git repositories.
 
 ## Installation
 
@@ -24,7 +24,7 @@ Kip's API consists of just one macro to import modules. And one function to upda
 
 `@require` takes a path to a package and a list of symbols to import from that package. If you want to use a different name locally for any of these symbols your can pass a `Pair` of symbols like `@require "./thing" a => b`. This will import `a` from the local package `"./thing"` and make it available as `b`.
 
-Now I just need to explain the syntax of the path parameter. In this example I'm using a relative path which is resolved relative to the REPL's `pwd()`. Or if I was editing a file it would be the `dirname()` of that file. This should be familiar for people who use unix machines. Now, assuming we are at the REPL, what `@require` does under the hood is check for a file called `joinpath(pwd(), "./thing")`. If it exists it will load it. Otherwise it tries a few other paths `joinpath(pwd(), "./thing.jl")`, `joinpath(pwd(), "./thing/main.jl")`, and `joinpath(pwd(), "./thing/src/thing.jl")`. This just enables you to save a bit of typing if you feel like it.
+Now I just need to explain the syntax of the path parameter. In this example I'm using a relative path which is resolved relative to the REPL's `pwd()`. Or if I was editing a file it would be the `dirname()` of that file. This should be familiar for people who use Unix machines. Now, assuming we are at the REPL, what `@require` does under the hood is check for a file called `joinpath(pwd(), "./thing")`. If it exists it will load it. Otherwise it tries a few other paths `joinpath(pwd(), "./thing.jl")`, `joinpath(pwd(), "./thing/main.jl")`, and `joinpath(pwd(), "./thing/src/thing.jl")`. This just enables you to save a bit of typing if you feel like it.
 
 There are a couple other types of paths you can pass to `@require`:
 
