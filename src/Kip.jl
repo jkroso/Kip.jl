@@ -185,8 +185,10 @@ end
 Get the directory the current file is stored in. If your in the REPL
 it will just return `pwd()`
 """
-macro dirname()
-  :(Base.source_path() ∈ ["" nothing] ? entry_path() : dirname(realpath(Base.source_path())))
+macro dirname() source_dir() end
+
+function source_dir()
+  Base.source_path() ∈ ["" nothing] ? entry_path() : dirname(realpath(Base.source_path()))
 end
 
 function entry_path()
@@ -197,7 +199,7 @@ end
 # Require `path` relative to the current module
 #
 function require(path::AbstractString; locals...)
-  require(path, @dirname; locals...)
+  require(path, source_dir(); locals...)
 end
 
 const modules = Dict{String,Module}()
