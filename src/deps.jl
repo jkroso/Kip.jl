@@ -13,16 +13,16 @@ const semver_regex = r"^
   (?:\.(\d+))? # patch    (optional)
 $"x
 
-abstract VersionQuery
+abstract type VersionQuery end
 
-immutable VersionRestriction{operator} <: VersionQuery
+struct VersionRestriction{operator} <: VersionQuery
   value::VersionNumber
 end
 
 toInt(s::AbstractString) = parse(Int, s)
 toInt(n::Number) = round(Int, n)
 
-immutable VersionGlob <: VersionQuery
+struct VersionGlob <: VersionQuery
   major::Int
   minor::Int
   patch::Int
@@ -34,7 +34,7 @@ immutable VersionGlob <: VersionQuery
   end
 end
 
-immutable Conjunction <: VersionQuery
+struct Conjunction <: VersionQuery
   queries::Tuple{Vararg{VersionQuery}}
 end
 
