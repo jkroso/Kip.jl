@@ -281,8 +281,9 @@ its actually loaded using the native module system under the hood.
 """
 macro require(path, names...)
   # @require "path" => name ...
-  if isa(path, Expr)
-    path,name = path.args
+  if Meta.isexpr(path, :call, 3)
+    @assert path.args[1] == :(=>)
+    path,name = path.args[2:3]
     name = esc(name)
   # @require "path" ...
   else
@@ -294,21 +295,19 @@ macro require(path, names...)
   ast = :(begin $ast end)
   names = collect(Any, names) # make array
   for n in names
-    if isa(n, Expr)
-      if n.head == :macrocall
-        # support importing macros
-        append!(names, n.args)
-      elseif n.head == :...
-        # import all exported symbols
-        # TODO: defer require until runtime
-        m = require(path)
-        mn = module_name(m)
-        append!(names, filter(n -> n != mn, Base.names(m)))
-      else
-        # support renaming variables as they are imported
-        @assert n.head == Symbol("=>")
-        push!(ast.args, :(const $(esc(n.args[2])) = $name.$(n.args[1])))
-      end
+    if Meta.isexpr(n, :macrocall)
+      # support importing macros
+      append!(names, n.args)
+    elseif Meta.isexpr(n, :...)
+      # import all exported symbols
+      # TODO: defer require until runtime
+      m = require(path)
+      mn = module_name(m)
+      append!(names, filter(n -> n != mn, Base.names(m)))
+    elseif Meta.isexpr(n, :call, 3)
+      # support renaming variables as they are imported
+      @assert n.args[1] == :(=>)
+      push!(ast.args, :(const $(esc(n.args[3])) = $name.$(n.args[2])))
     else
       @assert isa(n, Symbol)
       push!(ast.args, :(const $(esc(n)) = $name.$n))
