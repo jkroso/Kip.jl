@@ -5,9 +5,11 @@ using ProgressMeter
 
 include("./deps.jl")
 
-const home = joinpath(homedir(), ".kip")
-const repos = joinpath(home, "repos")
-const refs = joinpath(home, "refs")
+__init__() = begin
+  global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
+  global repos = joinpath(home, "repos")
+  global refs = joinpath(home, "refs")
+end
 
 const absolute_path = r"^/"
 const relative_path = r"^\.{1,2}"
