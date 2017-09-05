@@ -147,8 +147,21 @@ function resolve_github(url::AbstractString)
   # Can't do anything with a dirty repo so we have to use it as is
   LibGit2.isdirty(repo) && return localpath
 
+  head_name = LibGit2.Consts.HEAD_FILE
+  try
+    LibGit2.with(LibGit2.head(repo)) do head_ref
+      head_name = LibGit2.shortname(head_ref)
+      # if it is HEAD use short OID instead
+      if head_name == LibGit2.Consts.HEAD_FILE
+        head_name = string(LibGit2.GitHash(head_ref))
+      end
+    end
+  end
+
   # checkout the specified tag/branch/commit
-  if tag ≡ nothing
+  if head_name == tag
+    nothing # already in the right place
+  elseif tag ≡ nothing
     LibGit2.branch!(repo, "master")
   elseif ismatch(semver_regex, tag)
     tags = LibGit2.tag_list(repo)
@@ -157,7 +170,7 @@ function resolve_github(url::AbstractString)
     LibGit2.checkout!(repo, LibGit2.revparseid(repo, tags[idx]) |> string)
   else
     branch = LibGit2.lookup_branch(repo, tag)
-    @assert branch != nothing "$localpath has no branch $tag"
+    @assert !isnull(branch) "$repo has no branch $tag"
     LibGit2.branch!(repo, tag)
   end
 
