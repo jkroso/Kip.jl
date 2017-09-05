@@ -327,8 +327,9 @@ macro require(first, rest...)
         mn = module_name(m)
         append!(names, filter(n -> n != mn, Base.names(m)))
       else
-        for n in Base.names(m.(splat), true)
-          push!(exprs, :(const $(esc(n)) = $name.$splat.$n))
+        for n in Base.names(getfield(m, splat), true)
+          n == splat || ismatch(r"^(?:[#⭒]|eval$)", String(n)) && continue
+          push!(exprs, :(const $(esc(n)) = getfield(getfield($name, $(QuoteNode(splat))), $(QuoteNode(n)))))
         end
       end
     elseif @capture(n, from_ => to_)
