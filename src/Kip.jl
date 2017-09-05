@@ -2,6 +2,7 @@ __precompile__(true)
 
 module Kip # start of module
 using ProgressMeter
+using MacroTools
 
 include("./deps.jl")
 
@@ -294,42 +295,51 @@ feel as first class as a module which is designed for Kip.jl
 To load a registered module just use its registered url. Note that in this case
 its actually loaded using the native module system under the hood.
 """
-macro require(path, names...)
-  # @require "path" => name ...
-  if Meta.isexpr(path, :call, 3)
-    @assert path.args[1] == :(=>)
-    path,name = path.args[2:3]
+macro require(first, rest...)
+  splatall = false
+  if @capture(first, path_ => name_)
     name = esc(name)
-  # @require "path" ...
+  elseif @capture(first, path_...)
+    splatall = true
+    name = Symbol(path)
   else
-    isempty(names) && return :(require($path))
+    @assert @capture(first, path_)
+    isempty(rest) && return :(require($path))
     name = Symbol(path)
   end
   ast = :(const $name = require($path))
-  isempty(names) && return ast
-  ast = :(begin $ast end)
-  names = collect(Any, names) # make array
+  names = collect(Any, rest) # make array
+  if splatall
+    m = require(path)
+    mn = module_name(m)
+    append!(names, filter(Base.names(m, true)) do name
+      !(name == mn || ismatch(r"^[#⭒]", String(name)))
+    end)
+  end
+  exprs = []
   for n in names
     if Meta.isexpr(n, :macrocall)
       # support importing macros
       append!(names, n.args)
-    elseif Meta.isexpr(n, :...)
-      # import all exported symbols
-      # TODO: defer require until runtime
+    elseif @capture(n, splat_...)
       m = require(path)
-      mn = module_name(m)
-      append!(names, filter(n -> n != mn, Base.names(m)))
-    elseif Meta.isexpr(n, :call, 3)
+      if splat == :exports
+        mn = module_name(m)
+        append!(names, filter(n -> n != mn, Base.names(m)))
+      else
+        for n in Base.names(m.(splat), true)
+          push!(exprs, :(const $(esc(n)) = $name.$splat.$n))
+        end
+      end
+    elseif @capture(n, from_ => to_)
       # support renaming variables as they are imported
-      @assert n.args[1] == :(=>)
-      push!(ast.args, :(const $(esc(n.args[3])) = $name.$(n.args[2])))
+      push!(exprs, :(const $(esc(to)) = $name.$from))
     else
       @assert isa(n, Symbol)
-      push!(ast.args, :(const $(esc(n)) = $name.$n))
+      push!(exprs, :(const $(esc(n)) = $name.$n))
     end
   end
-  push!(ast.args, name)
-  ast
+  isempty(exprs) ? ast : :(begin $ast; $(exprs...); $name end)
 end
 
 export @require, @dirname
