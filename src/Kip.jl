@@ -313,7 +313,7 @@ macro require(first, rest...)
     m = require(path)
     mn = module_name(m)
     append!(names, filter(Base.names(m, true)) do name
-      !(name == mn || ismatch(r"^[#⭒]", String(name)))
+      !(name == mn || ismatch(r"^(?:[#⭒]|eval$)", String(name)))
     end)
   end
   exprs = []
