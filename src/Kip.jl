@@ -78,29 +78,25 @@ target_path(pkg) = begin
 end
 
 """
-Convert a `spec` used in a `@require` call to its local storage location
+Convert a `spec`, as in `@require [spec]`, to its local storage location
 """
 dir(spec::String) = begin
   user,reponame = match(gh_shorthand, spec).captures
   joinpath(repos, user, reponame)|>realpath
 end
 
-##
-# Run Julia's conventional install hook
-#
+"Run Julia's conventional install hook"
 function build(pkg::AbstractString)
   deps = joinpath(pkg, "deps")
   isdir(deps) && isfile(joinpath(deps, "build.jl")) && cd(build, deps)
 end
 build() = run(`julia build.jl`)
 
+"Determine a sensible name for a Package defined a file called `path`"
 pkgname(path::AbstractString) =
   splitext(basename(isdirpath(path) ? dirname(path) : splitext(path)[1]))[1]
 
-##
-# Try some sensible defaults if `path` doesn't already refer to
-# a file
-#
+"Try some sensible defaults if `path` doesn't already refer to a file"
 function complete(path::AbstractString, pkgname::AbstractString=pkgname(path))
   for p in (path,
             path * ".jl",
@@ -112,9 +108,7 @@ function complete(path::AbstractString, pkgname::AbstractString=pkgname(path))
   error("$path can not be completed to a file")
 end
 
-##
-# Resolve a require call to an absolute file path
-#
+"Resolve a require call to an absolute file path"
 function resolve(path::AbstractString, base::AbstractString)
   ismatch(absolute_path, path) && return complete(path)
   ismatch(relative_path, path) && return complete(normpath(base, path))
@@ -211,18 +205,16 @@ function entry_path()
   isempty(ARGS) ? pwd() : dirname(joinpath(pwd(), ARGS[end]))
 end
 
-##
-# Require `path` relative to the current module
-#
+
+"Require `path` relative to the current module"
 function require(path::AbstractString; locals...)
   require(path, source_dir(); locals...)
 end
 
 const modules = Dict{String,Module}()
 
-##
-# Require `path` relative to `base`
-#
+
+"Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString; locals...)
   path, pkgname = resolve(path, base)
   get!(modules, path) do
