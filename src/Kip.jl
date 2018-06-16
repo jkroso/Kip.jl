@@ -16,9 +16,9 @@ const absolute_path = r"^/"
 const relative_path = r"^\.{1,2}"
 const gh_shorthand = r"
   ^github.com/  # all github paths start the same way
-  ([\w-.]+)     # username
+  ([\w\-.]+)    # username
   /
-  ([\w-.]+)     # repo
+  ([\w\-.]+)    # repo
   (?:@([^/]+))? # commit, tag, branch, or semver query (defaults to latest commit)
   (?:/(.+))?    # path to the module inside the repo (optional)
   $
@@ -73,7 +73,7 @@ target_path(pkg) = begin
   repo = LibGit2.GitRepo(pkg)
   remote = LibGit2.remotes(repo)[1]
   url = LibGit2.get(LibGit2.GitRemote, repo, remote)|>LibGit2.url
-  name = match(r"github.com/([\w-.]+/[\w-.]+)\.git", url)[1]
+  name = match(r"github.com/([\w\-.]+/[\w\-.]+)\.git", url)[1]
   joinpath(repos, name)
 end
 
