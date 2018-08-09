@@ -90,7 +90,7 @@ end
 ##
 # coiljl/URI
 #
-const control = (map(UInt8, 0:parse(Int,"1f",16)) |> collect |> String) * "\x7f"
+const control = (map(UInt8, 0:parse(Int,"1f",base=16)) |> collect |> String) * "\x7f"
 const blacklist = Set("<>\",;+\$![]'* {}|\\^`" * control)
 
 encode_match(substr) = string('%', uppercase(hex(substr[1], 2)))

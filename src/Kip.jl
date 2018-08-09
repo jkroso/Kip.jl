@@ -1,8 +1,10 @@
 __precompile__(true)
 
 module Kip # start of module
+using Pkg
 using ProgressMeter
 using MacroTools
+import LibGit2
 
 include("./deps.jl")
 
@@ -108,39 +110,9 @@ function complete(path::AbstractString, pkgname::AbstractString=pkgname(path))
   error("$path can not be completed to a file")
 end
 
-"Resolve a require call to an absolute file path"
-function resolve(path::AbstractString, base::AbstractString)
-  ismatch(absolute_path, path) && return complete(path)
-  ismatch(relative_path, path) && return complete(normpath(base, path))
-  m = match(gh_shorthand, path)
-  @assert m != nothing  "unable to resolve '$path'"
-  username,reponame,tag,subpath = m.captures
-  pkgname = splitext(reponame)[1]
-  if isregistered(username, pkgname)
-    path = Pkg.dir(pkgname)
-    ispath(path) || Pkg.add(pkgname)
-    return complete(path, pkgname)
-  end
-  package = resolve_github(path)
-  build(package)
-  if subpath ≡ nothing
-    complete(package, pkgname)
-  else
-    complete(joinpath(package, subpath))
-  end
-end
-
-function resolve_github(url::AbstractString)
-  user,reponame,tag = match(gh_shorthand, url).captures
-  localpath = joinpath(repos, user, reponame)
-  repo = if isdir(localpath)
-    LibGit2.GitRepo(localpath)
-  else
-    LibGit2.clone("https://github.com/$user/$reponame.git", localpath)
-  end
-
+function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
   # Can't do anything with a dirty repo so we have to use it as is
-  LibGit2.isdirty(repo) && return localpath
+  LibGit2.isdirty(repo) && return LibGit2.path(repo)
 
   head_name = LibGit2.Consts.HEAD_FILE
   try
@@ -151,6 +123,7 @@ function resolve_github(url::AbstractString)
         head_name = string(LibGit2.GitHash(head_ref))
       end
     end
+  catch
   end
 
   # checkout the specified tag/branch/commit
@@ -158,19 +131,19 @@ function resolve_github(url::AbstractString)
     nothing # already in the right place
   elseif tag ≡ nothing
     LibGit2.branch!(repo, "master")
-  elseif ismatch(semver_regex, tag)
+  elseif occursin(semver_regex, tag)
     tags = LibGit2.tag_list(repo)
     v,idx = findmax(semver_query(tag), VersionNumber(t) for t in tags)
-    @assert idx > 0 "$user/$reponame has no tag matching $tag. Try again after running Kip.update()"
+    @assert idx > 0 "$username/$reponame has no tag matching $tag. Try again after running Kip.update()"
     LibGit2.checkout!(repo, LibGit2.revparseid(repo, tags[idx]) |> string)
   else
     branch = LibGit2.lookup_branch(repo, tag)
-    @assert !isnull(branch) "$repo has no branch $tag"
+    @assert branch != nothing "$repo has no branch $tag"
     LibGit2.branch!(repo, tag)
   end
 
   # make a copy of the repository in its current state
-  dest = joinpath(refs, user, reponame, string(LibGit2.head_oid(repo)))
+  dest = joinpath(refs, username, reponame, string(LibGit2.head_oid(repo)))
   isdir(dest) || snapshot_repo(localpath, dest)
   dest
 end
@@ -180,15 +153,7 @@ function snapshot_repo(src, dest)
   for name in readdir(src)
     name != ".git" && cp(joinpath(src, name), joinpath(dest, name))
   end
-end
-
-function isregistered(username::AbstractString, pkgname::AbstractString)
-  # same name as a registered module
-  ispath(Pkg.dir("METADATA", pkgname)) || return false
-  url = readstring(Pkg.dir("METADATA", pkgname, "url"))
-  m = match(r"github.com/([^/]+)/([^/.]+)", url).captures
-  # is a registered module
-  username == m[1] && pkgname == m[2]
+  build(dest)
 end
 
 """
@@ -205,7 +170,6 @@ function entry_path()
   isempty(ARGS) ? pwd() : dirname(joinpath(pwd(), ARGS[end]))
 end
 
-
 "Require `path` relative to the current module"
 function require(path::AbstractString; locals...)
   require(path, source_dir(); locals...)
@@ -213,36 +177,64 @@ end
 
 const modules = Dict{String,Module}()
 
-
 "Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString; locals...)
-  path, pkgname = resolve(path, base)
-  get!(modules, path) do
-    eval_module(Symbol(pkgname), path; locals...)
+  if occursin(absolute_path, path)
+    load_module(complete(path)...; locals...)
+  elseif occursin(relative_path, path)
+    load_module(complete(normpath(base, path))...; locals...)
+  else
+    m = match(gh_shorthand, path)
+    @assert m != nothing  "unable to resolve '$path'"
+    username,reponame,tag,subpath = m.captures
+    pkgname = splitext(reponame)[1]
+    repo = getrepo(username, reponame)
+    if is_pkg3_pkg(LibGit2.path(repo))
+      get!(modules, path) do
+        Pkg.activate(base)
+        if !haskey(Pkg.installed(), pkgname)
+          Pkg.add(Pkg.PackageSpec(url=LibGit2.path(repo)))
+        end
+        deps = Pkg.TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
+        uuid = Base.UUID(deps[pkgname])
+        Base.require(Base.PkgId(uuid, pkgname))
+      end
+    else
+      package = checkout_repo(repo, username, reponame, tag)
+      file, pkgname = if subpath ≡ nothing
+        complete(package, pkgname)
+      else
+        complete(joinpath(package, subpath))
+      end
+      load_module(file, pkgname; locals...)
+    end
   end
 end
 
-function eval_module(name::Symbol, path::AbstractString; locals...)
-  # if installed in native location then load it using native system
-  if startswith(path, Pkg.dir())
-    return eval(:(import $name; $name))
-  end
-
-  # prefix with a ⭒ to avoid clashing with variables inside the module
-  mod = Module(Symbol(:⭒, name))
-
-  eval(mod, Expr(:toplevel,
-                 :(using Kip),
-                 :(eval(x) = Main.Core.eval($mod, x)),
-                 :(eval(m, x) = Main.Core.eval(m, x)),
-                 [:(const $k = $v) for (k,v) in locals]...,
-                 :(include($path))))
-
-  # unpack the submodule if thats all thats in it. For unregistered native modules
-  if isdefined(mod, name) && isa(getfield(mod, name), Module)
-    getfield(mod, name)
+function getrepo(user, repo)
+  localpath = joinpath(repos, user, repo)
+  if isdir(localpath)
+    LibGit2.GitRepo(localpath)
   else
-    mod
+    LibGit2.clone("https://github.com/$user/$repo.git", localpath)
+  end
+end
+
+function is_pkg3_pkg(dir::String)
+  any(file -> isfile(joinpath(dir, file)), ("JuliaProject.toml", "Project.toml", "REQUIRE"))
+end
+
+function load_module(path, name; locals...)
+  get!(modules, path) do
+    # prefix with a ⭒ to avoid clashing with variables inside the module
+    mod = Module(Symbol(:⭒, name))
+    Core.eval(mod, Expr(:toplevel,
+                        :(using Kip),
+                        :(eval(x) = Core.eval($mod, x)),
+                        :(eval(m, x) = Core.eval(m, x)),
+                        [:(const $k = $v) for (k,v) in locals]...,
+                        :(Base.include($mod, $path))))
+    return mod
   end
 end
 
@@ -305,7 +297,7 @@ macro require(first, rest...)
     m = require(path)
     mn = module_name(m)
     append!(names, filter(Base.names(m, true)) do name
-      !(name == mn || ismatch(r"^(?:[#⭒]|eval$)", String(name)))
+      !(name == mn || occursin(r"^(?:[#⭒]|eval$)", String(name)))
     end)
   end
   exprs = []
@@ -320,15 +312,16 @@ macro require(first, rest...)
         append!(names, filter(n -> n != mn, Base.names(m)))
       else
         for n in Base.names(getfield(m, splat), true)
-          n == splat || ismatch(r"^(?:[#⭒]|eval$)", String(n)) && continue
+          n == splat || occursin(r"^(?:[#⭒]|eval$)", String(n)) && continue
           push!(exprs, :(const $(esc(n)) = getfield(getfield($name, $(QuoteNode(splat))), $(QuoteNode(n)))))
         end
       end
     elseif @capture(n, from_ => to_)
       # support renaming variables as they are imported
       push!(exprs, :(const $(esc(to)) = $name.$from))
+    elseif n isa LineNumberNode
     else
-      @assert isa(n, Symbol)
+      @assert n isa Symbol
       push!(exprs, :(const $(esc(n)) = $name.$n))
     end
   end
