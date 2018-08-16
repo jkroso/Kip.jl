@@ -144,12 +144,13 @@ function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
 
   # make a copy of the repository in its current state
   dest = joinpath(refs, username, reponame, string(LibGit2.head_oid(repo)))
-  isdir(dest) || snapshot_repo(localpath, dest)
+  isdir(dest) || snapshot(repo, dest)
   dest
 end
 
-function snapshot_repo(src, dest)
+function snapshot(repo, dest)
   mkpath(dest)
+  src = LibGit2.path(repo)
   for name in readdir(src)
     name != ".git" && cp(joinpath(src, name), joinpath(dest, name))
   end
