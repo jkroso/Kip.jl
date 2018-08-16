@@ -238,6 +238,7 @@ function load_module(path, name; locals...)
                         :(using Kip),
                         :(eval(x) = Core.eval($mod, x)),
                         :(eval(m, x) = Core.eval(m, x)),
+                        :(include(path) = Base.include($mod, path)),
                         [:(const $k = $v) for (k,v) in locals]...,
                         :(Base.include($mod, $path))))
     return mod
