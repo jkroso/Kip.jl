@@ -221,7 +221,12 @@ function getrepo(user, repo)
 end
 
 function is_pkg3_pkg(dir::String)
-  any(file -> isfile(joinpath(dir, file)), ("JuliaProject.toml", "Project.toml", "REQUIRE"))
+  any(("JuliaProject.toml", "Project.toml", "REQUIRE")) do file
+    path = joinpath(dir, file)
+    isfile(path) || return false
+    file == "REQUIRE" && return true
+    haskey(Pkg.TOML.parsefile(path), "name")
+  end
 end
 
 function load_module(path, name; locals...)
