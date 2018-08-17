@@ -40,7 +40,7 @@ uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 deps = ["Compat"]
 git-tree-sha1 = "c443e1c8d58a4e9f61b708ad0a88286c7042145b"
 repo-rev = "master"
-repo-url = "/Users/jkroso/.kip/repos/MikeInnes/MacroTools.jl"
+repo-url = "https://github.com/MikeInnes/MacroTools.jl.git"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
 version = "0.4.4+"
 

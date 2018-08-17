@@ -194,7 +194,12 @@ function require(path::AbstractString, base::AbstractString; locals...)
       get!(modules, path) do
         Pkg.activate(base)
         if !haskey(Pkg.installed(), pkgname)
-          Pkg.add(Pkg.PackageSpec(url=LibGit2.path(repo)))
+          spec = if tag != nothing
+            Pkg.PackageSpec(url=LibGit2.path(repo), rev=tag)
+          else
+            Pkg.PackageSpec(url=LibGit2.path(repo))
+          end
+          Pkg.add(spec)
         end
         deps = Pkg.TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
         uuid = Base.UUID(deps[pkgname])
