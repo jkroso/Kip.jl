@@ -307,7 +307,7 @@ macro require(first, rest...)
   names = collect(Any, rest) # make array
   if splatall
     m = require(path)
-    mn = module_name(m)
+    mn = nameof(m)
     append!(names, filter(Base.names(m, true)) do name
       !(name == mn || occursin(r"^(?:[#⭒]|eval$)", String(name)))
     end)
@@ -320,7 +320,7 @@ macro require(first, rest...)
     elseif @capture(n, splat_...)
       m = require(path)
       if splat == :exports
-        mn = module_name(m)
+        mn = nameof(m)
         append!(names, filter(n -> n != mn, Base.names(m)))
       else
         for n in Base.names(getfield(m, splat), true)

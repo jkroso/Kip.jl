@@ -56,19 +56,19 @@ end
 ##
 # Test if a version satisfies a SemverQuery
 #
-Base.ismatch(q::VersionRestriction{:<}, v::VersionNumber) = v < q.value
-Base.ismatch(q::VersionRestriction{:>}, v::VersionNumber) = v > q.value
-Base.ismatch(q::VersionRestriction{:>=}, v::VersionNumber) = v >= q.value
-Base.ismatch(q::VersionRestriction{:<=}, v::VersionNumber) = v <= q.value
+ismatch(q::VersionRestriction{:<}, v::VersionNumber) = v < q.value
+ismatch(q::VersionRestriction{:>}, v::VersionNumber) = v > q.value
+ismatch(q::VersionRestriction{:>=}, v::VersionNumber) = v >= q.value
+ismatch(q::VersionRestriction{:<=}, v::VersionNumber) = v <= q.value
 
-Base.ismatch(q::VersionGlob, v::VersionNumber) = begin
+ismatch(q::VersionGlob, v::VersionNumber) = begin
   q.patch ≡ -1 || q.patch ≡ v.patch || return false
   q.minor ≡ -1 || q.minor ≡ v.minor || return false
   q.major ≡ -1 || q.major ≡ v.major || return false
   return true
 end
 
-Base.ismatch(q::Conjunction, v::VersionNumber) = all(q-> ismatch(q, v), q.queries)
+ismatch(q::Conjunction, v::VersionNumber) = all(q-> ismatch(q, v), q.queries)
 
 ##
 # Find the best match from a collection of versions
@@ -93,10 +93,10 @@ end
 const control = (map(UInt8, 0:parse(Int,"1f",base=16)) |> collect |> String) * "\x7f"
 const blacklist = Set("<>\",;+\$![]'* {}|\\^`" * control)
 
-encode_match(substr) = string('%', uppercase(hex(substr[1], 2)))
+encode_match(substr) = string('%', uppercase(string(substr[1], 2, base=16)))
 
 """
 Hex encode characters which might be dangerous in certain contexts without
 obfuscating it so much that it loses its structure as a uri string
 """
-encode(str::AbstractString) = replace(str, blacklist, encode_match)
+encode(str::AbstractString) = replace(str, blacklist=>encode_match)
