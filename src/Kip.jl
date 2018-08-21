@@ -94,9 +94,16 @@ function build(pkg::AbstractString)
 end
 build() = run(`julia build.jl`)
 
-"Determine a sensible name for a Package defined a file called `path`"
-pkgname(path::AbstractString) =
-  splitext(basename(isdirpath(path) ? dirname(path) : splitext(path)[1]))[1]
+"Determine a sensible name for a Package defined in `path`"
+pkgname(path::AbstractString) = begin
+  name = if basename(path) == "main.jl"
+    dir = basename(dirname(path))
+    dir == "src" ? basename(dirname(dirname(path))) : dir
+  else
+    basename(path)
+  end
+  first(splitext(name))
+end
 
 "Try some sensible defaults if `path` doesn't already refer to a file"
 function complete(path::AbstractString, pkgname::AbstractString=pkgname(path))
