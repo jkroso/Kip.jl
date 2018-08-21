@@ -46,7 +46,7 @@ isrepo(dir) = isdir(joinpath(dir, ".git"))
 gitrepos(dir) = begin
   isrepo(dir) && return [dir]
   children = filter(isdir, map(n->joinpath(dir,n), readdir(dir)))
-  reduce(append!, [], map(gitrepos, children))
+  reduce(append!, map(gitrepos, children), init=[])
 end
 
 """
@@ -99,6 +99,8 @@ pkgname(path::AbstractString) = begin
   name = if basename(path) == "main.jl"
     dir = basename(dirname(path))
     dir == "src" ? basename(dirname(dirname(path))) : dir
+  elseif isdirpath(path)
+    basename(dirname(path))
   else
     basename(path)
   end
