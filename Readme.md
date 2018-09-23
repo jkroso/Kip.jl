@@ -8,10 +8,13 @@ Kip is an alternative module system for Julia with the goal of being more robust
 Pkg.clone("https://github.com/jkroso/Kip.jl.git")
 ```
 
-Then add this code to your ~/.juliarc.jl
+Then add this code to your ~/.julia/config/startup.jl
 
 ```julia
-using Kip
+import Pkg
+if haskey(Pkg.installed(), "Kip")
+  eval(:(using Kip))
+end
 ```
 
 Now it's like Kip was built into Julia. It will be available at the REPL and in any files you run
