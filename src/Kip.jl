@@ -202,13 +202,12 @@ function require(path::AbstractString, base::AbstractString; locals...)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
         Pkg.activate(base)
-        if !haskey(Pkg.installed(), pkgname)
-          spec = if tag != nothing
-            Pkg.PackageSpec(url=LibGit2.path(repo), rev=tag)
-          else
-            Pkg.PackageSpec(url=LibGit2.path(repo))
-          end
-          Pkg.add(spec)
+        if haskey(Pkg.installed(), pkgname)
+          Pkg.update(pkgname)
+        else
+          remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
+          url = String(split(string(remote), ' ')[end])
+          Pkg.add(Pkg.PackageSpec(url=url, rev=tag == nothing ? "master" : tag))
         end
         deps = Pkg.TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
         uuid = Base.UUID(deps[pkgname])
