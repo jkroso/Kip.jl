@@ -5,6 +5,7 @@ using Pkg
 using ProgressMeter
 using MacroTools
 import LibGit2
+import Dates
 
 include("./deps.jl")
 
@@ -187,6 +188,9 @@ end
 
 const modules = Dict{String,Module}()
 
+yesterday() = Dates.now() - Dates.Day(1)
+lastchange(file) = Dates.unix2datetime(mtime(file))
+
 "Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString; locals...)
   if occursin(absolute_path, path)
@@ -202,14 +206,18 @@ function require(path::AbstractString, base::AbstractString; locals...)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
         Pkg.activate(base)
+        project_file = joinpath(base, "Project.toml")
         if haskey(Pkg.installed(), pkgname)
-          Pkg.update(pkgname)
+          if lastchange(project_file) < yesterday()
+            Pkg.update(pkgname)
+            touch(project_file)
+          end
         else
           remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
           url = String(split(string(remote), ' ')[end])
           Pkg.add(Pkg.PackageSpec(url=url, rev=tag == nothing ? "master" : tag))
         end
-        deps = Pkg.TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
+        deps = Pkg.TOML.parsefile(project_file)["deps"]
         uuid = Base.UUID(deps[pkgname])
         Base.require(Base.PkgId(uuid, pkgname))
       end
