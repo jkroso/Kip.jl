@@ -256,23 +256,23 @@ eval_module(path) = Base.include(get_module(path), path)
 
 function get_module(path, name=pkgname(path))
   get!(modules, path) do
-    @eval module $(Symbol(:⭒, name)); using Kip; end
-  end
-end
-
-function load_module(path, name; locals...)
-  get!(modules, path) do
     # prefix with a ⭒ to avoid clashing with variables inside the module
     mod = Module(Symbol(:⭒, name))
     Core.eval(mod, Expr(:toplevel,
                         :(using Kip),
                         :(eval(x) = Core.eval($mod, x)),
                         :(eval(m, x) = Core.eval(m, x)),
-                        :(include(path) = Base.include($mod, path)),
-                        [:(const $k = $v) for (k,v) in locals]...,
-                        :(Base.include($mod, $path))))
-    return mod
+                        :(include(path) = Base.include($mod, path))))
+    mod
   end
+end
+
+function load_module(path, name; locals...)
+  haskey(modules, path) && return modules[path]
+  mod = get_module(path, name)
+  Core.eval(mod, Expr(:toplevel, [:(const $k = $v) for (k,v) in locals]...))
+  Base.include(mod, path)
+  mod
 end
 
 """
