@@ -251,6 +251,15 @@ function is_pkg3_pkg(dir::String)
   end
 end
 
+"Eval a module and return the value of it's last expression"
+eval_module(path) = Base.include(get_module(path), path)
+
+function get_module(path, name=pkgname(path))
+  get!(modules, path) do
+    @eval module $(Symbol(:⭒, name)); using Kip; end
+  end
+end
+
 function load_module(path, name; locals...)
   get!(modules, path) do
     # prefix with a ⭒ to avoid clashing with variables inside the module
