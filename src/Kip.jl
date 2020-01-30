@@ -52,7 +52,7 @@ end
 
 """
 symlink a package which you are developing locally so that it can be
-`@require`d as if it was remote. This just save you running `Kip.update()`
+`@use`d as if it was remote. This just save you running `Kip.update()`
 all the time
 """
 link(pkg=pwd()) = begin
@@ -81,7 +81,7 @@ target_path(pkg) = begin
 end
 
 """
-Convert a `spec`, as in `@require [spec]`, to its local storage location
+Convert a `spec`, as in `@use [spec]`, to its local storage location
 """
 dir(spec::String) = begin
   user,reponame = match(gh_shorthand, spec).captures
@@ -279,7 +279,7 @@ end
 Import objects from another file by name
 
 ```julia
-@require "./user" User Address
+@use "./user" User Address
 ```
 
 The above code will import `User` and `Address` from the file `@dirname()/user.jl`.
@@ -287,25 +287,25 @@ If you want to use a different name for one of these variables to what they are 
 in there own file you can do this by:
 
 ```julia
-@require "./user" User => Person
+@use "./user" User => Person
 ```
 
 To refer to the `Module` object of the file being required:
 
 ```julia
-@require "./user" => UserModule
+@use "./user" => UserModule
 ```
 
 To load all exported variables verbatim:
 
 ```julia
-@require "./user" exports...
+@use "./user" exports...
 ```
 
 To load a module from github:
 
 ```julia
-@require "github.com/jkroso/Emitter.jl/main.jl" emit
+@use "github.com/jkroso/Emitter.jl/main.jl" emit
 ```
 
 NB: You don't actually need to specify the file you want out of the repository
@@ -316,7 +316,7 @@ feel as first class as a module which is designed for Kip.jl
 To load a registered module just use its registered url. Note that in this case
 its actually loaded using the native module system under the hood.
 """
-macro require(first, rest...)
+macro use(first, rest...)
   splatall = false
   if @capture(first, path_ => name_)
     name = esc(name)
@@ -365,6 +365,9 @@ macro require(first, rest...)
   isempty(exprs) ? ast : :(begin $ast; $(exprs...); $name end)
 end
 
-export @require, @dirname
+# For backwards compatability
+@eval $(Symbol("@require")) = $(getfield(Kip, Symbol("@use")))
+
+export @use, @dirname, @require
 
 end # end of module
