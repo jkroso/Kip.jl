@@ -308,6 +308,15 @@ To load a module from github:
 @use "github.com/jkroso/Emitter.jl/main.jl" emit
 ```
 
+To load submodules there is a convenient syntax available
+
+```julia
+@use "github.com/jkroso/Units.jl" ton [
+  "./Imperial" ft
+  "./Money" USD
+]
+```
+
 NB: You don't actually need to specify the file you want out of the repository
 in this case since by default it assumes its the file called "main.jl". It will
 also try "src/Emitter.jl" hence native modules are fully supported and should
@@ -356,9 +365,14 @@ macro use(first, rest...)
     elseif @capture(n, from_ => to_)
       # support renaming variables as they are imported
       push!(exprs, :(const $(esc(to)) = $name.$from))
+    elseif Meta.isexpr(n, :vcat)
+      for row in n.args
+        relpath, rest = (row.args[1], row.args[2:end])
+        push!(exprs, esc(:(@use($(normpath(path, relpath)), $(rest...)))))
+      end
     elseif n isa LineNumberNode
     else
-      @assert n isa Symbol
+      @assert n isa Symbol "Expected a Symbol, got $(repr(n))"
       push!(exprs, :(const $(esc(n)) = $name.$n))
     end
   end
