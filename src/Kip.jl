@@ -337,7 +337,6 @@ macro use(first, rest...)
     isempty(rest) && return :(require($path))
     name = Symbol(path)
   end
-  ast = :(const $name = require($path))
   names = collect(Any, rest) # make array
   if splatall
     m = require(path)
@@ -368,7 +367,7 @@ macro use(first, rest...)
     elseif Meta.isexpr(n, :vcat)
       for row in n.args
         relpath, rest = (row.args[1], row.args[2:end])
-        push!(exprs, esc(:(@use($(normpath(path, relpath)), $(rest...)))))
+        push!(exprs, esc(macroexpand(__module__, Expr(:macrocall, getfield(Kip, Symbol("@use")), __source__, normpath(path, relpath), rest...))))
       end
     elseif n isa LineNumberNode
     else
@@ -376,7 +375,17 @@ macro use(first, rest...)
       push!(exprs, :(const $(esc(n)) = $name.$n))
     end
   end
-  isempty(exprs) ? ast : :(begin $ast; $(exprs...); $name end)
+  if isempty(exprs)
+    Meta.isexpr(name, :escape) ? :(const $name = require($path)) : :(require($path))
+  elseif all(x->Meta.isexpr(x, :vcat), names) # all submodules
+    quote $(exprs...) end
+  else
+    quote
+      const $name = require($path)
+      $(exprs...)
+      $name
+    end
+  end
 end
 
 # For backwards compatability
