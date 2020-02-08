@@ -364,10 +364,15 @@ macro use(first, rest...)
     elseif @capture(n, from_ => to_)
       # support renaming variables as they are imported
       push!(exprs, :(const $(esc(to)) = $name.$from))
-    elseif Meta.isexpr(n, :vcat)
-      for row in n.args
+    elseif inbrackets(n)
+      for row in tovcat(n).args
         relpath, rest = (row.args[1], row.args[2:end])
-        push!(exprs, esc(macroexpand(__module__, Expr(:macrocall, getfield(Kip, Symbol("@use")), __source__, normpath(path, relpath), rest...))))
+        firstarg = if @capture(relpath, p_ => n_)
+          :($(normpath(path, p)) => $n)
+        else
+          normpath(path, relpath)
+        end
+        push!(exprs, esc(macroexpand(__module__, Expr(:macrocall, getfield(Kip, Symbol("@use")), __source__, firstarg, rest...))))
       end
     elseif n isa LineNumberNode
     else
@@ -377,7 +382,7 @@ macro use(first, rest...)
   end
   if isempty(exprs)
     Meta.isexpr(name, :escape) ? :(const $name = require($path)) : :(require($path))
-  elseif all(x->Meta.isexpr(x, :vcat), names) # all submodules
+  elseif all(inbrackets, names) # all submodules
     quote $(exprs...) end
   else
     quote
@@ -387,6 +392,15 @@ macro use(first, rest...)
     end
   end
 end
+
+inbrackets(expr) = Meta.isexpr(expr, :vcat) || Meta.isexpr(expr, :hcat) || Meta.isexpr(expr, :vect)
+tovcat(n) =
+  if Meta.isexpr(n, :hcat) || Meta.isexpr(n, :vect)
+    Expr(:vcat, Expr(:row, n.args...))
+  else
+    Expr(:vcat, map(torow, n.args)...)
+  end
+torow(n) = Meta.isexpr(n, :row) ? n : Expr(:row, n)
 
 # For backwards compatability
 @eval $(Symbol("@require")) = $(getfield(Kip, Symbol("@use")))
