@@ -38,7 +38,7 @@ update() =
       LibGit2.fetch(repo)
       LibGit2.merge!(repo, fastforward=true)
     catch
-      warn("unable to update $repopath")
+      @warn "unable to update $repopath"
     end
   end
 
