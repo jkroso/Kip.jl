@@ -254,7 +254,7 @@ end
 "Eval a module and return the value of it's last expression"
 eval_module(path) = Base.include(get_module(path), path)
 
-function get_module(path, name=pkgname(path), interactive=false)
+function get_module(path, name=pkgname(path); interactive=false)
   get!(modules, path) do
     # prefix with a ⭒ to avoid clashing with variables inside the module
     mod = Module(Symbol(:⭒, name))
