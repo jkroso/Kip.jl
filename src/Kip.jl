@@ -254,12 +254,13 @@ end
 "Eval a module and return the value of it's last expression"
 eval_module(path) = Base.include(get_module(path), path)
 
-function get_module(path, name=pkgname(path))
+function get_module(path, name=pkgname(path), interactive=false)
   get!(modules, path) do
     # prefix with a ⭒ to avoid clashing with variables inside the module
     mod = Module(Symbol(:⭒, name))
     Core.eval(mod, Expr(:toplevel,
                         :(using Kip),
+                        interactive ? :(using InteractiveUtils) : nothing,
                         :(eval(x) = Core.eval($mod, x)),
                         :(eval(m, x) = Core.eval(m, x)),
                         :(include(path) = Base.include($mod, path))))
