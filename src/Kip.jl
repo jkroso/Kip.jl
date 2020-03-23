@@ -205,21 +205,22 @@ function require(path::AbstractString, base::AbstractString; locals...)
     repo = getrepo(username, reponame)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
-        Pkg.activate(base)
-        project_file = joinpath(base, "Project.toml")
-        if haskey(Pkg.installed(), pkgname)
-          if lastchange(project_file) < yesterday()
-            Pkg.update(pkgname)
-            touch(project_file)
+        Pkg.activate(base) do
+          project_file = joinpath(base, "Project.toml")
+          if is_installed(pkgname)
+            if lastchange(project_file) < yesterday()
+              Pkg.update(pkgname)
+              touch(project_file)
+            end
+          else
+            remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
+            url = String(split(string(remote), ' ')[end])
+            Pkg.add(Pkg.PackageSpec(url=url, rev=tag == nothing ? "master" : tag))
           end
-        else
-          remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
-          url = String(split(string(remote), ' ')[end])
-          Pkg.add(Pkg.PackageSpec(url=url, rev=tag == nothing ? "master" : tag))
+          deps = Pkg.TOML.parsefile(project_file)["deps"]
+          uuid = Base.UUID(deps[pkgname])
+          Base.require(Base.PkgId(uuid, pkgname))
         end
-        deps = Pkg.TOML.parsefile(project_file)["deps"]
-        uuid = Base.UUID(deps[pkgname])
-        Base.require(Base.PkgId(uuid, pkgname))
       end
     else
       package = checkout_repo(repo, username, reponame, tag)
@@ -231,6 +232,15 @@ function require(path::AbstractString, base::AbstractString; locals...)
       load_module(file, pkgname; locals...)
     end
   end
+end
+
+function is_installed(pkgname)
+  for d in values(Pkg.dependencies())
+    d.is_direct_dep || continue
+    isnothing(d.version) && continue
+    d.name == pkgname && return true
+  end
+  return false
 end
 
 function getrepo(user, repo)
