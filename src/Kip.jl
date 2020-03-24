@@ -139,7 +139,7 @@ function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
   # checkout the specified tag/branch/commit
   if head_name == tag
     nothing # already in the right place
-  elseif tag ≡ nothing
+  elseif isnothing(tag)
     LibGit2.branch!(repo, "master")
   elseif occursin(semver_regex, tag)
     tags = LibGit2.tag_list(repo)
@@ -148,7 +148,7 @@ function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
     LibGit2.checkout!(repo, LibGit2.revparseid(repo, tags[idx]) |> string)
   else
     branch = LibGit2.lookup_branch(repo, tag)
-    @assert branch != nothing "$repo has no branch $tag"
+    @assert !isnothing(branch) "$repo has no branch $tag"
     LibGit2.branch!(repo, tag)
   end
 
@@ -207,7 +207,7 @@ function require(path::AbstractString, base::AbstractString; locals...)
       get!(modules, path) do
         Pkg.activate(base) do
           project_file = joinpath(base, "Project.toml")
-          if is_installed(pkgname)
+          if isfile(project_file) && is_installed(pkgname)
             if lastchange(project_file) < yesterday()
               Pkg.update(pkgname)
               touch(project_file)
@@ -215,7 +215,7 @@ function require(path::AbstractString, base::AbstractString; locals...)
           else
             remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
             url = String(split(string(remote), ' ')[end])
-            Pkg.add(Pkg.PackageSpec(url=url, rev=tag == nothing ? "master" : tag))
+            Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
           end
           deps = Pkg.TOML.parsefile(project_file)["deps"]
           uuid = Base.UUID(deps[pkgname])
@@ -224,7 +224,7 @@ function require(path::AbstractString, base::AbstractString; locals...)
       end
     else
       package = checkout_repo(repo, username, reponame, tag)
-      file, pkgname = if subpath ≡ nothing
+      file, pkgname = if isnothing(subpath)
         complete(package, pkgname)
       else
         complete(joinpath(package, subpath))
