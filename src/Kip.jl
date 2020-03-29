@@ -209,8 +209,13 @@ function require(path::AbstractString, base::AbstractString; locals...)
           project_file = joinpath(base, "Project.toml")
           if isfile(project_file) && is_installed(pkgname)
             if lastchange(project_file) < yesterday()
-              Pkg.update(pkgname)
-              touch(project_file)
+              try
+                Pkg.update(pkgname)
+                touch(project_file)
+              catch e
+                @warn "unable to update $pkgname"
+                showerror(stderr, e)
+              end
             end
           else
             remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
