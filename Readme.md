@@ -1,6 +1,6 @@
 # Kip
 
-Kip is an alternative module system for Julia with the goal of being more robust and easier to use. With Kip __packages don't have names__. Instead modules are identified by the file they are in. So you can have several versions of the same package without them overwriting each other. Also it favors putting __dependency info inline__ rather than in a REQUIRE file. This reduces indirection and works well at the REPL. The final key difference is that it __installs dependencies at runtime__. So you never have to think about if a package is installed or not. Though you should run `Kip.update()` occasionally to update Kip's local cache of packages which are just plain Git repositories.
+Kip is an alternative module system for Julia with the goal of being more robust and easier to use. With Kip __packages don't have names__. Instead modules are identified by the file they are in. So you can have several versions of the same package without them overwriting each other. Also it favours putting __dependency info inline__ rather than in a REQUIRE file. This reduces indirection and works well at the REPL. The final key difference is that it __installs dependencies at runtime__. So you never have to think about if a package is installed or not. Though you should run `Kip.update()` occasionally to update Kip's local cache of packages which are just plain Git repositories.
 
 ## Installation
 
@@ -12,9 +12,8 @@ Then add this code to your ~/.julia/config/startup.jl
 
 ```julia
 import Pkg
-if haskey(Pkg.installed(), "Kip")
-  eval(:(using Kip))
-end
+using Kip
+haskey(ENV, "ATOM_HOME") && @use "github.com/jkroso/Rutherford.jl"
 ```
 
 Now it's like Kip was built into Julia. It will be available at the REPL and in any files you run
@@ -73,4 +72,4 @@ While at the REPL it could listen to changes on the modules you require and auto
 
 ##### Dependency tree linting
 
-Kips ability to load multiple versions of a module at the same time is a double edged sword. The upside is package developers can make breaking changes to their API's without instantly breaking all their dependent projects. The downside is that if you and your dependencies have dependencies in common and they load different versions of these modules to you then you might run into issues if you passing Type instances back and fourth between your direct dependencies. This is a subtle problem which can be hard to recognize. Especially if you not aware that it can happen. A good solution to this might be to use a static analysis tool to check your dependency tree for potential instances of this problem. It would make sense to make it part of a [linting tool](//github.com/tonyhffong/Lint.jl).
+Kips ability to load multiple versions of a module at the same time is a double edged sword. The upside is package developers can make breaking changes to their API's without instantly breaking all their dependent projects. The downside is that if you and your dependencies have dependencies in common and they load different versions of these modules to you then you might run into issues if you passing Type instances back and fourth between your direct dependencies. This is a subtle problem which can be hard to recognise. Especially if you not aware that it can happen. A good solution to this might be to use a static analysis tool to check your dependency tree for potential instances of this problem. It would make sense to make it part of a [linting tool](//github.com/tonyhffong/Lint.jl).
