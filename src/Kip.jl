@@ -207,17 +207,17 @@ function require(path::AbstractString, base::AbstractString; locals...)
       get!(modules, path) do
         Pkg.activate(base) do
           project_file = joinpath(base, "Project.toml")
-          if isfile(project_file) && is_installed(pkgname)
+          should_add = if isfile(project_file) && is_installed(pkgname)
             if lastchange(project_file) < yesterday()
-              try
-                Pkg.update(pkgname)
-                touch(project_file)
-              catch e
-                @warn "unable to update $pkgname"
-                showerror(stderr, e)
-              end
+              Pkg.rm(pkgname) # better to rm then add than update because update
+              true            # assumes the dep will have a project.toml file
+            else
+              false
             end
           else
+            true
+          end
+          if should_add
             remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
             url = String(split(string(remote), ' ')[end])
             Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
