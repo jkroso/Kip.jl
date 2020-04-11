@@ -93,7 +93,7 @@ function build(pkg::AbstractString)
   deps = joinpath(pkg, "deps")
   isdir(deps) && isfile(joinpath(deps, "build.jl")) && cd(build, deps)
 end
-build() = run(`julia build.jl`)
+build() = run(`julia --startup-file=no build.jl`)
 
 "Determine a sensible name for a Package defined in `path`"
 pkgname(path::AbstractString) = begin
