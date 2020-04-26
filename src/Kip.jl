@@ -207,20 +207,10 @@ function require(path::AbstractString, base::AbstractString; locals...)
       get!(modules, path) do
         Pkg.activate(base) do
           project_file = joinpath(base, "Project.toml")
-          should_add = if isfile(project_file) && is_installed(pkgname)
-            if lastchange(project_file) < yesterday()
-              Pkg.rm(pkgname) # better to rm then add than update because update
-              true            # assumes the dep will have a project.toml file
-            else
-              false
-            end
+          if is_installed(base, pkgname)
+            update_pkg(project_file, repo, tag)
           else
-            true
-          end
-          if should_add
-            remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
-            url = String(split(string(remote), ' ')[end])
-            Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
+            add_pkg(repo, tag)
           end
           deps = Pkg.TOML.parsefile(project_file)["deps"]
           uuid = Base.UUID(deps[pkgname])
@@ -239,13 +229,23 @@ function require(path::AbstractString, base::AbstractString; locals...)
   end
 end
 
-function is_installed(pkgname)
-  for d in values(Pkg.dependencies())
-    d.is_direct_dep || continue
-    isnothing(d.version) && continue
-    d.name == pkgname && return true
+function is_installed(base, pkgname)
+  file = joinpath(base, "Project.toml")
+  isfile(file) && haskey(Pkg.TOML.parsefile(file)["deps"], pkgname)
+end
+
+function add_pkg(repo, tag)
+  remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
+  url = String(split(string(remote), ' ')[end])
+  Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
+end
+
+function update_pkg(project_file, repo, tag)
+  if lastchange(project_file) < yesterday()
+    rm(project_file)
+    rm(joinpath(base, "Manifest.toml"), force=true)
+    add_pkg(repo, tag)
   end
-  return false
 end
 
 function getrepo(user, repo)
