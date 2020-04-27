@@ -206,13 +206,12 @@ function require(path::AbstractString, base::AbstractString; locals...)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
         Pkg.activate(base) do
-          project_file = joinpath(base, "Project.toml")
           if is_installed(base, pkgname)
-            update_pkg(project_file, repo, tag)
+            update_pkg(base, repo, tag)
           else
             add_pkg(repo, tag)
           end
-          deps = Pkg.TOML.parsefile(project_file)["deps"]
+          deps = Pkg.TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
           uuid = Base.UUID(deps[pkgname])
           Base.require(Base.PkgId(uuid, pkgname))
         end
@@ -240,9 +239,9 @@ function add_pkg(repo, tag)
   Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
 end
 
-function update_pkg(project_file, repo, tag)
-  if lastchange(project_file) < yesterday()
-    rm(project_file)
+function update_pkg(base, repo, tag)
+  if lastchange(joinpath(base, "Project.toml")) < yesterday()
+    rm(joinpath(base, "Project.toml"))
     rm(joinpath(base, "Manifest.toml"), force=true)
     add_pkg(repo, tag)
   end
