@@ -4,6 +4,7 @@ module Kip # start of module
 using Pkg
 using ProgressMeter
 using MacroTools
+using Git
 import LibGit2
 import Dates
 
@@ -33,10 +34,8 @@ Update all 3rd party repositories
 update() =
   @showprogress "Updating packages..." for repopath in gitrepos(repos)
     try
-      repo = LibGit2.GitRepo(repopath)
-      LibGit2.branch!(repo, "master")
-      LibGit2.fetch(repo)
-      LibGit2.merge!(repo, fastforward=true)
+      branch = read(git(["symbolic-ref", "--short", "HEAD"], String)|>rstrip
+      run(git(["pull", "--ff-only", "origin", branch]))
     catch
       @warn "unable to update $repopath"
     end
@@ -241,9 +240,8 @@ end
 
 function update_pkg(base, repo, tag)
   if lastchange(joinpath(base, "Project.toml")) < yesterday()
-    rm(joinpath(base, "Project.toml"))
-    rm(joinpath(base, "Manifest.toml"), force=true)
-    add_pkg(repo, tag)
+    LibGit2.fetch(repo)
+    run(git(["checkout", tag]))
   end
 end
 
