@@ -34,7 +34,7 @@ Update all 3rd party repositories
 update() =
   @showprogress "Updating packages..." for repopath in gitrepos(repos)
     try
-      branch = read(git(["symbolic-ref", "--short", "HEAD"], String)|>rstrip
+      branch = read(git(["symbolic-ref", "--short", "HEAD"], String))|>rstrip
       run(git(["pull", "--ff-only", "origin", branch]))
     catch
       @warn "unable to update $repopath"
@@ -194,7 +194,7 @@ function require(path::AbstractString, base::AbstractString; locals...)
       get!(modules, path) do
         Pkg.activate(base) do
           if is_installed(base, pkgname)
-            update_pkg(base, repo, tag)
+            update_pkg(repo, tag)
           else
             add_pkg(repo, tag)
           end
@@ -226,10 +226,13 @@ function add_pkg(repo, tag)
   Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
 end
 
-function update_pkg(base, repo, tag)
-  if lastchange(joinpath(base, "Project.toml")) < yesterday()
+function update_pkg(repo, tag)
+  LibGit2.isdirty(repo) && return
+  dir = LibGit2.path(repo)
+  if lastchange(dir) < yesterday()
     LibGit2.fetch(repo)
-    run(git(["checkout", tag]))
+    run(git(["checkout", isnothing(tag) ? "master" : tag]))
+    touch(dir)
   end
 end
 
