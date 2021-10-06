@@ -123,23 +123,11 @@ function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
   # Can't do anything with a dirty repo so we have to use it as is
   LibGit2.isdirty(repo) && return LibGit2.path(repo)
 
-  head_name = LibGit2.Consts.HEAD_FILE
-  try
-    LibGit2.with(LibGit2.head(repo)) do head_ref
-      head_name = LibGit2.shortname(head_ref)
-      # if it is HEAD use short OID instead
-      if head_name == LibGit2.Consts.HEAD_FILE
-        head_name = string(LibGit2.GitHash(head_ref))
-      end
-    end
-  catch
-  end
+  head_name = read(git(["rev-parse", "--short", "HEAD"]), String)|>rstrip
 
   # checkout the specified tag/branch/commit
-  if head_name == tag
+  if isnothing(tag) || head_name == tag
     nothing # already in the right place
-  elseif isnothing(tag)
-    LibGit2.branch!(repo, "master")
   elseif occursin(semver_regex, tag)
     tags = LibGit2.tag_list(repo)
     v,idx = findmax(semver_query(tag), VersionNumber(t) for t in tags)
