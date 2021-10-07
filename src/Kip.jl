@@ -6,7 +6,6 @@ using ProgressMeter
 using MacroTools
 using Git
 import LibGit2
-import Dates
 
 include("./deps.jl")
 
@@ -175,9 +174,6 @@ end
 
 const modules = Dict{String,Module}()
 
-yesterday() = Dates.now() - Dates.Day(1)
-lastchange(file) = Dates.unix2datetime(mtime(file))
-
 "Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString; locals...)
   if occursin(absolute_path, path)
@@ -229,10 +225,11 @@ end
 function update_pkg(repo, tag)
   LibGit2.isdirty(repo) && return
   dir = LibGit2.path(repo)
-  if lastchange(dir) < yesterday()
+  tag_str = isnothing(tag) ? "master" : tag
+  cd(dir) do
     LibGit2.fetch(repo)
-    run(git(["checkout", isnothing(tag) ? "master" : tag]))
-    touch(dir)
+    changes = parse(Int, read(git(["rev-list", "HEAD...$tag_str", "--count"]), String))
+    changes > 0 && run(git(["checkout", tag_str]))
   end
 end
 
