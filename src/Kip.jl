@@ -33,8 +33,10 @@ Update all 3rd party repositories
 update() =
   @showprogress "Updating packages..." for repopath in gitrepos(repos)
     try
-      branch = read(git(["symbolic-ref", "--short", "HEAD"], String))|>rstrip
-      run(git(["pull", "--ff-only", "origin", branch]))
+      cd(repopath) do
+        branch = read(git(["symbolic-ref", "--short", "HEAD"], String))|>rstrip
+        run(git(["pull", "--ff-only", "origin", branch]))
+      end
     catch
       @warn "unable to update $repopath"
     end
@@ -118,14 +120,17 @@ function complete(path::AbstractString, pkgname::AbstractString=pkgname(path))
   error("$path can not be completed to a file")
 end
 
+function head_name(repo::LibGit2.GitRepo)
+  cd(LibGit2.path(repo)) do
+    rstrip(read(git(["rev-parse", "--short", "HEAD"]), String))
+  end
+end
+
 function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
   # Can't do anything with a dirty repo so we have to use it as is
   LibGit2.isdirty(repo) && return LibGit2.path(repo)
-
-  head_name = read(git(["rev-parse", "--short", "HEAD"]), String)|>rstrip
-
   # checkout the specified tag/branch/commit
-  if isnothing(tag) || head_name == tag
+  if isnothing(tag) || head_name(repo) == tag
     nothing # already in the right place
   elseif occursin(semver_regex, tag)
     tags = LibGit2.tag_list(repo)
@@ -224,9 +229,8 @@ end
 
 function update_pkg(repo, tag)
   LibGit2.isdirty(repo) && return
-  dir = LibGit2.path(repo)
   tag_str = isnothing(tag) ? "master" : tag
-  cd(dir) do
+  cd(LibGit2.path(repo)) do
     LibGit2.fetch(repo)
     changes = parse(Int, read(git(["rev-list", "HEAD...$tag_str", "--count"]), String))
     changes > 0 && run(git(["checkout", tag_str]))
