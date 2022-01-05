@@ -1,4 +1,4 @@
 import Pkg
-if haskey(Pkg.installed(), "Kip")
+if any(x->x.name == "Kip", values(Pkg.dependencies()))
   eval(:(using Kip))
 end

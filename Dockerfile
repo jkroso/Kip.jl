@@ -1,6 +1,6 @@
 FROM debian:jessie
 
-ARG JULIA_VERSION=0.6.0-rc3
+ARG JULIA_VERSION=1.7.1
 ENV JULIA_PATH=/usr/local/julia
 
 RUN apt-get update \
@@ -15,7 +15,8 @@ RUN mkdir $JULIA_PATH \
 
 ENV PATH=$JULIA_PATH/bin:$PATH
 
-RUN ["julia", "-e", "Pkg.clone(\"https://github.com/jkroso/Kip.jl.git\")"]
-COPY .juliarc.jl /root
+RUN ["julia", "-e", "import Pkg;Pkg.add(url=\"https://github.com/jkroso/Kip.jl.git\")"]
+RUN mkdir -p /root/.julia/config
+COPY startup.jl /root/.julia/config/startup.jl
 
 ENTRYPOINT julia
