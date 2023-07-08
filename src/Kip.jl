@@ -287,9 +287,9 @@ Import objects from another file by name
 @use "./user" User Address
 ```
 
-The above code will import `User` and `Address` from the file `@dirname()/user.jl`.
-If you want to use a different name for one of these variables to what they are named
-in there own file you can do this by:
+The above code will import `User` and `Address` from the file `./user.jl`. If
+you want to use a different name for one of these variables to what they are
+named in there own file you can do this by:
 
 ```julia
 @use "./user" User => Person
@@ -310,7 +310,7 @@ To load all exported variables verbatim:
 To load a module from github:
 
 ```julia
-@use "github.com/jkroso/Emitter.jl/main.jl" emit
+@use "github.com/jkroso/Emitter.jl" emit
 ```
 
 To load submodules there is a convenient syntax available
@@ -322,15 +322,24 @@ To load submodules there is a convenient syntax available
 ]
 ```
 
-NB: You don't actually need to specify the file you want out of the repository
-in this case since by default it assumes its the file called "main.jl". It will
-also try "src/Emitter.jl" hence native modules are fully supported and should
-feel as first class as a module which is designed for Kip.jl
+To load a registerd Julia package
 
-To load a registered module just use its registered url. Note that in this case
-its actually loaded using the native module system under the hood.
+```
+@use SQLite: DBInterface
+```
 """
 macro use(first, rest...)
+  if @capture(first, pkg_Symbol) || @capture(first, pkg_Symbol:_) || @capture(first, (pkg_Symbol:_,__))
+    str = replace(repr(first), r"#= [^=]* =#" => "", "()" => "")
+    str = replace(str, r"^:\({0,2}([^\)]+)\){0,2}$" => s"import \1")
+    return quote
+      if !installed($(string(pkg)))
+        Pkg.activate(@dirname())
+        Pkg.add($(string(pkg)))
+      end
+      $(esc(Meta.parse(str)))
+    end
+  end
   splatall = false
   if @capture(first, path_ => name_)
     name = esc(name)
@@ -397,6 +406,8 @@ macro use(first, rest...)
     end
   end
 end
+
+installed(depname) = any(dep -> dep.name == depname && dep.is_direct_dep, values(Pkg.dependencies()))
 
 inbrackets(expr) = Meta.isexpr(expr, :vcat) || Meta.isexpr(expr, :hcat) || Meta.isexpr(expr, :vect)
 tovcat(n) =
