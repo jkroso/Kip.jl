@@ -13,7 +13,7 @@ __init__() = begin
   global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
-  global stdlib = Set(readdir(joinpath(DEPOT_PATH[end],"stdlib", "v$(VERSION.major).$(VERSION.minor)")))
+  global stdlib = Set(readdir(Pkg.stdlib_dir()))
 end
 
 const absolute_path = r"^/"
