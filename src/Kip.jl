@@ -13,6 +13,7 @@ __init__() = begin
   global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
+  global stdlib = Set(readdir(joinpath(DEPOT_PATH[end],"stdlib", "v$(VERSION.major).$(VERSION.minor)")))
 end
 
 const absolute_path = r"^/"
@@ -333,11 +334,11 @@ macro use(first, rest...)
     str = replace(repr(first), r"#= [^=]* =#" => "", "()" => "")
     str = replace(str, r"^:\({0,2}([^\)]+)\){0,2}$" => s"import \1")
     return quote
-      if !installed($(string(pkg)))
-        Pkg.activate(@dirname())
-        Pkg.add($(string(pkg)))
-      end
+      old = Base.ACTIVE_PROJECT[]
+      Base.ACTIVE_PROJECT[] = @dirname()
+      installed($(string(pkg))) || Pkg.add($(string(pkg)))
       $(esc(Meta.parse(str)))
+      Base.ACTIVE_PROJECT[] = old
     end
   end
   splatall = false
@@ -407,7 +408,7 @@ macro use(first, rest...)
   end
 end
 
-installed(depname) = any(dep -> dep.name == depname && dep.is_direct_dep, values(Pkg.dependencies()))
+installed(pkg) = pkg in stdlib || any(dep -> dep.name == pkg && dep.is_direct_dep, values(Pkg.dependencies()))
 
 inbrackets(expr) = Meta.isexpr(expr, :vcat) || Meta.isexpr(expr, :hcat) || Meta.isexpr(expr, :vect)
 tovcat(n) =
