@@ -6,6 +6,7 @@ using ProgressMeter
 using MacroTools
 using Git
 import LibGit2
+import TOML
 
 include("./deps.jl")
 
@@ -337,6 +338,7 @@ macro use(first, rest...)
       old = Base.ACTIVE_PROJECT[]
       Base.ACTIVE_PROJECT[] = @dirname()
       installed($(string(pkg))) || Pkg.add($(string(pkg)))
+      Pkg.instantiate()
       $(esc(Meta.parse(str)))
       Base.ACTIVE_PROJECT[] = old
     end
@@ -408,7 +410,15 @@ macro use(first, rest...)
   end
 end
 
-installed(pkg) = pkg in stdlib || any(dep -> dep.name == pkg && dep.is_direct_dep, values(Pkg.dependencies()))
+const empty_deps = Dict{String,Any}()
+
+installed(pkg) = begin
+  pkg in stdlib && return true
+  active_dir = Base.ACTIVE_PROJECT[]
+  file = joinpath(active_dir, "Project.toml")
+  ispath(file) || return false
+  haskey(get(TOML.parsefile(file), "deps", empty_deps), pkg)
+end
 
 inbrackets(expr) = Meta.isexpr(expr, :vcat) || Meta.isexpr(expr, :hcat) || Meta.isexpr(expr, :vect)
 tovcat(n) =
