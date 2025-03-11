@@ -358,8 +358,9 @@ macro use(first, rest...)
   if splatall
     m = require(path)
     mn = nameof(m)
-    append!(names, filter(Base.names(m, true)) do name
-      !(name == mn || occursin(r"^(?:[#⭒]|eval$)", String(name)))
+    append!(names, filter(Base.names(m)) do name
+      name == mn && return false
+      !occursin(r"^(?:[#⭒]|eval|include$)", String(name))
     end)
   end
   exprs = []
@@ -373,7 +374,7 @@ macro use(first, rest...)
         mn = nameof(m)
         append!(names, filter(n -> n != mn, Base.names(m)))
       else
-        for n in Base.names(getfield(m, splat), true)
+        for n in Base.names(getfield(m, splat), all=true)
           n == splat || occursin(r"^(?:[#⭒]|eval$)", String(n)) && continue
           push!(exprs, :(const $(esc(n)) = getfield(getfield($name, $(QuoteNode(splat))), $(QuoteNode(n)))))
         end
