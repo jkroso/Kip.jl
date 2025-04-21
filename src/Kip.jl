@@ -331,9 +331,10 @@ To load a registerd Julia package
 ```
 """
 macro use(first, rest...)
-  if @capture(first, pkg_Symbol) || @capture(first, pkg_Symbol:_) || @capture(first, (pkg_Symbol:_,__))
+  if @capture(first, pkg_Symbol) || @capture(first, pkg_Symbol:_) || @capture(first, (pkg_Symbol:_,__)) || @capture(first, (pkg_Symbol...))
     str = replace(repr(first), r"#= [^=]* =#" => "", "()" => "")
     str = replace(str, r"^:\({0,2}([^\)]+)\){0,2}$" => s"import \1")
+    str = replace(str, r"^import ([^.]+)\.{3}$" => s"using \1")
     return quote
       old = Base.ACTIVE_PROJECT[]
       Base.ACTIVE_PROJECT[] = @dirname()
