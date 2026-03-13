@@ -395,7 +395,7 @@ end
 function find_pkg_uuid(name::String)
   haskey(stdlib_uuids, name) && return stdlib_uuids[name]
   for (pkgid, _) in Base.loaded_modules
-    pkgid.name == name && return string(pkgid.uuid)
+    pkgid.name == name && !isnothing(pkgid.uuid) && return string(pkgid.uuid)
   end
   manifest = joinpath(dirname(Base.active_project()), "Manifest.toml")
   if isfile(manifest)
