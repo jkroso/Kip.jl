@@ -512,6 +512,9 @@ function load_from_cache(path::String, name::String)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
   # Push cache package onto LOAD_PATH so subprocess can resolve deps
   pushfirst!(LOAD_PATH, pkg_dir)
+  # Suppress Pkg auto-precompilation noise in the compilecache subprocess
+  old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
+  ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
   try
     ji_path, ocache_path = Base.compilecache(pkg_id, src_path)
     return Base._require_from_serialized(pkg_id, ji_path, ocache_path, src_path)
@@ -522,6 +525,11 @@ function load_from_cache(path::String, name::String)
     write(nocompile_marker, sprint(showerror, e, bt))
     rethrow()
   finally
+    if isnothing(old_auto)
+      delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
+    else
+      ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
+    end
     # In a compilecache subprocess, keep cache dirs on LOAD_PATH so Julia can
     # locate dependency sources when serializing the parent module
     if !Base.generating_output()
