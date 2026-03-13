@@ -22,6 +22,14 @@ __init__() = begin
   global refs = joinpath(home, "refs")
   global cache = joinpath(home, "cache")
   global stdlib = Set(readdir(Sys.STDLIB))
+  global stdlib_uuids = Dict{String,String}()
+  for d in readdir(Sys.STDLIB)
+    proj = joinpath(Sys.STDLIB, d, "Project.toml")
+    if isfile(proj)
+      p = TOML.parsefile(proj)
+      haskey(p, "name") && haskey(p, "uuid") && (stdlib_uuids[p["name"]] = p["uuid"])
+    end
+  end
 end
 
 const absolute_path = r"^/"
@@ -378,15 +386,9 @@ end
 
 "Look up a package's UUID from loaded modules, stdlib, or the environment manifest"
 function find_pkg_uuid(name::String)
+  haskey(stdlib_uuids, name) && return stdlib_uuids[name]
   for (pkgid, _) in Base.loaded_modules
     pkgid.name == name && return string(pkgid.uuid)
-  end
-  for d in readdir(Sys.STDLIB)
-    proj = joinpath(Sys.STDLIB, d, "Project.toml")
-    if isfile(proj)
-      p = TOML.parsefile(proj)
-      get(p, "name", "") == name && return p["uuid"]
-    end
   end
   manifest = joinpath(dirname(Base.active_project()), "Manifest.toml")
   if isfile(manifest)
