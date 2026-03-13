@@ -304,6 +304,73 @@ function find_use_packages(source::String)
   pkgs
 end
 
+"Scan source for @use path patterns and return resolved local file paths"
+function find_use_paths(source::String, base::String)
+  paths = String[]
+  for line in split(source, "\n")
+    line = strip(line)
+    m = match(r"^@use\s+\"([^\"]+)\"", line)
+    isnothing(m) && continue
+    p = m[1]
+    if occursin(absolute_path, p)
+      push_unique!(paths, first(complete(p)))
+    elseif occursin(relative_path, p)
+      push_unique!(paths, first(complete(normpath(base, p))))
+    else
+      # Handle github.com URLs
+      gm = match(gh_shorthand, p)
+      if !isnothing(gm)
+        username, reponame, tag, subpath = gm.captures
+        pkgn = splitext(reponame)[1]
+        try
+          repo = getrepo(username, reponame)
+          if !is_pkg3_pkg(LibGit2.path(repo))
+            package = checkout_repo(repo, username, reponame, tag)
+            file, _ = if isnothing(subpath)
+              complete(package, pkgn)
+            else
+              complete(joinpath(package, subpath))
+            end
+            push_unique!(paths, file)
+          end
+        catch e
+          @debug "Failed to resolve github dep $p" exception=e
+        end
+      end
+    end
+  end
+  paths
+end
+push_unique!(v, x) = x ∉ v && push!(v, x)
+
+"""
+Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PATH
+before we compile the parent module. Returns list of cache dirs added to LOAD_PATH.
+"""
+function precompile_deps!(path::String)
+  dirs = String[]
+  source = read(path, String)
+  base = dirname(path)
+  for dep_path in find_use_paths(source, base)
+    # Recursively pre-compile this dep's deps first
+    append!(dirs, precompile_deps!(dep_path))
+    # Now compile this dep (load_from_cache handles caching/noprecompile)
+    hash = content_hash(dep_path)
+    dep_name = replace(splitext(basename(dep_path))[1], r"[^\w]" => "_")
+    cache_name = "⭒" * dep_name * "_" * hash[1:12]
+    pkg_dir = joinpath(cache, hash)
+    # Ensure the cache package dir exists and is on LOAD_PATH
+    if !isdir(joinpath(pkg_dir, "src"))
+      create_cache_package(dep_path, hash, cache_name)
+    end
+    if pkg_dir ∉ LOAD_PATH
+      pushfirst!(LOAD_PATH, pkg_dir)
+      push!(dirs, pkg_dir)
+    end
+  end
+  dirs
+end
+
 "Look up a package's UUID from loaded modules, stdlib, or the environment manifest"
 function find_pkg_uuid(name::String)
   for (pkgid, _) in Base.loaded_modules
@@ -357,7 +424,9 @@ function create_cache_package(path::String, hash::String, name::String)
   $deps_toml""")
 
   # Resolve manifest if we have Julia package deps and no Manifest yet
-  if !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml"))
+  # Skip in compilecache subprocess — Pkg.resolve triggers auto-precompilation that
+  # uses a different environment without our LOAD_PATH entries
+  if !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
     try
       Pkg.activate(pkg_dir) do
         Pkg.resolve()
@@ -401,6 +470,7 @@ function load_from_cache(path::String, name::String)
   isfile(nocompile_marker) && return nothing
 
   # Check for existing compiled cache
+  pkg_dir = joinpath(cache, hash)
   cache_dir = Base.compilecache_dir(pkg_id)
   if isdir(cache_dir)
     for f in readdir(cache_dir)
@@ -409,7 +479,14 @@ function load_from_cache(path::String, name::String)
       ocache = Base.ocachefile_from_cachefile(ji_path)
       ocache_path = isfile(ocache) ? ocache : nothing
       try
-        return Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
+        mod = Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
+        # In a compilecache subprocess, ensure the cache package is on LOAD_PATH
+        # so Julia can locate this dep's source when serializing the parent module
+        if Base.generating_output()
+          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name)
+          pushfirst!(LOAD_PATH, pkg_dir)
+        end
+        return mod
       catch
         # Stale cache, recompile
         rm(ji_path, force=true)
@@ -419,6 +496,9 @@ function load_from_cache(path::String, name::String)
   end
 
   # No valid cache found, compile
+  # Pre-compile path-based @use deps so their cache dirs are on LOAD_PATH
+  # when _require_from_serialized loads this module's .ji and its deps
+  dep_dirs = precompile_deps!(path)
   pkg_dir, pkg_id = create_cache_package(path, hash, cache_name)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
   # Push cache package onto LOAD_PATH so subprocess can resolve deps
@@ -429,10 +509,15 @@ function load_from_cache(path::String, name::String)
   catch e
     # Mark as non-precompilable so we don't retry
     mkpath(dirname(nocompile_marker))
-    write(nocompile_marker, string(e))
+    bt = catch_backtrace()
+    write(nocompile_marker, sprint(showerror, e, bt))
     rethrow()
   finally
-    popfirst!(LOAD_PATH)
+    # In a compilecache subprocess, keep cache dirs on LOAD_PATH so Julia can
+    # locate dependency sources when serializing the parent module
+    if !Base.generating_output()
+      filter!(p -> p != pkg_dir && p ∉ dep_dirs, LOAD_PATH)
+    end
   end
 end
 
