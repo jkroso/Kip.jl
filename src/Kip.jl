@@ -398,7 +398,7 @@ function precompile_deps!(path::String)
     # Now compile this dep (load_from_cache handles caching/noprecompile)
     dep_source = read(dep_path, String)
     hash = source_hash(dep_source)
-    dep_name = replace(splitext(basename(dep_path))[1], r"[^\w]" => "_")
+    dep_name = replace(pkgname(dep_path), r"[^\w]" => "_")
     cache_name = valid_identifier(dep_name * "_" * hash[1:12])
     pkg_dir = joinpath(cache, hash)
     # Ensure the cache package dir exists and is on LOAD_PATH
