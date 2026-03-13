@@ -296,8 +296,9 @@ function deterministic_uuid(hash::String)
   Base.UUID(parse(UInt128, h, base=16))
 end
 
-"Get the content hash of a file"
-content_hash(path::String) = bytes2hex(SHA.sha256(read(path)))
+"Get the content hash of a file or source string"
+content_hash(path::String) = source_hash(read(path))
+source_hash(source) = bytes2hex(SHA.sha256(source))
 
 const kip_uuid = "c32b5c58-9bcc-11e8-1f8b-492a5c8a885c"
 
@@ -368,13 +369,14 @@ function precompile_deps!(path::String)
     # Recursively pre-compile this dep's deps first
     append!(dirs, precompile_deps!(dep_path))
     # Now compile this dep (load_from_cache handles caching/noprecompile)
-    hash = content_hash(dep_path)
+    dep_source = read(dep_path, String)
+    hash = source_hash(dep_source)
     dep_name = replace(splitext(basename(dep_path))[1], r"[^\w]" => "_")
     cache_name = dep_name * "_" * hash[1:12]
     pkg_dir = joinpath(cache, hash)
     # Ensure the cache package dir exists and is on LOAD_PATH
     if !isdir(joinpath(pkg_dir, "src"))
-      create_cache_package(dep_path, hash, cache_name)
+      create_cache_package(dep_path, hash, cache_name, dep_source)
     end
     if pkg_dir ∉ LOAD_PATH
       pushfirst!(LOAD_PATH, pkg_dir)
@@ -402,13 +404,11 @@ function find_pkg_uuid(name::String)
 end
 
 "Create a synthetic package for compilecache"
-function create_cache_package(path::String, hash::String, name::String)
+function create_cache_package(path::String, hash::String, name::String, source::String=read(path, String))
   pkg_dir = joinpath(cache, hash)
   src_dir = joinpath(pkg_dir, "src")
   mkpath(src_dir)
   uuid = deterministic_uuid(hash)
-
-  source = read(path, String)
   use_pkgs = find_use_packages(source)
   has_kip_macros = occursin(r"@use\b|@dirname\b", source)
 
@@ -477,7 +477,8 @@ end
 
 "Try to load a module from the compile cache"
 function load_from_cache(path::String, name::String)
-  hash = content_hash(path)
+  source = read(path, String)
+  hash = source_hash(source)
   cache_name = replace(name, r"[^\w]" => "_") * "_" * hash[1:12]
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
@@ -499,7 +500,7 @@ function load_from_cache(path::String, name::String)
         # In a compilecache subprocess, ensure the cache package is on LOAD_PATH
         # so Julia can locate this dep's source when serializing the parent module
         if Base.generating_output()
-          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name)
+          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name, source)
           pushfirst!(LOAD_PATH, pkg_dir)
         end
         return mod
@@ -515,7 +516,7 @@ function load_from_cache(path::String, name::String)
   # Pre-compile path-based @use deps so their cache dirs are on LOAD_PATH
   # when _require_from_serialized loads this module's .ji and its deps
   dep_dirs = precompile_deps!(path)
-  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name)
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
   # Push cache package onto LOAD_PATH so subprocess can resolve deps
   pushfirst!(LOAD_PATH, pkg_dir)
