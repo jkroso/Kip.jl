@@ -7,6 +7,7 @@ using MacroTools
 using Git
 import LibGit2
 import TOML
+import SHA
 
 include("./deps.jl")
 
@@ -14,6 +15,7 @@ __init__() = begin
   global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
+  global cache = joinpath(home, "cache")
   global stdlib = Set(readdir(Pkg.stdlib_dir()))
 end
 
@@ -175,18 +177,18 @@ function entry_path()
 end
 
 "Require `path` relative to the current module"
-function require(path::AbstractString; locals...)
-  require(path, source_dir(); locals...)
+function require(path::AbstractString)
+  require(path, source_dir())
 end
 
 const modules = Dict{String,Module}()
 
 "Require `path` relative to `base`"
-function require(path::AbstractString, base::AbstractString; locals...)
+function require(path::AbstractString, base::AbstractString)
   if occursin(absolute_path, path)
-    load_module(complete(path)...; locals...)
+    load_module(complete(path)...)
   elseif occursin(relative_path, path)
-    load_module(complete(normpath(base, path))...; locals...)
+    load_module(complete(normpath(base, path))...)
   else
     m = match(gh_shorthand, path)
     @assert m != nothing  "unable to resolve '$path'"
@@ -213,7 +215,7 @@ function require(path::AbstractString, base::AbstractString; locals...)
       else
         complete(joinpath(package, subpath))
       end
-      load_module(file, pkgname; locals...)
+      load_module(file, pkgname)
     end
   end
 end
@@ -274,11 +276,185 @@ function get_module(path, name=pkgname(path); interactive=false)
   end
 end
 
-function load_module(path, name; locals...)
+"Generate a deterministic UUID from a content hash string"
+function deterministic_uuid(hash::String)
+  h = hash[1:min(32, length(hash))]
+  h = rpad(h, 32, '0')
+  Base.UUID(parse(UInt128, h, base=16))
+end
+
+"Get the content hash of a file"
+content_hash(path::String) = bytes2hex(SHA.sha256(read(path)))
+
+const kip_uuid = "c32b5c58-9bcc-11e8-1f8b-492a5c8a885c"
+
+"Scan source for @use PkgName patterns and return package names"
+function find_use_packages(source::String)
+  pkgs = String[]
+  for line in split(source, "\n")
+    line = strip(line)
+    # Match @use PkgName, @use PkgName:..., @use PkgName.sub, @use PkgName name1 name2
+    # Package names start with uppercase; paths start with "
+    m = match(r"^@use\s+([A-Z]\w*)", line)
+    !isnothing(m) && m[1] ∉ pkgs && push!(pkgs, m[1])
+    # Also match @use (PkgName.sub)
+    m2 = match(r"^@use\s+\(?([A-Z]\w*)[\.\)]", line)
+    !isnothing(m2) && m2[1] ∉ pkgs && push!(pkgs, m2[1])
+  end
+  pkgs
+end
+
+"Look up a package's UUID from loaded modules, stdlib, or the environment manifest"
+function find_pkg_uuid(name::String)
+  for (pkgid, _) in Base.loaded_modules
+    pkgid.name == name && return string(pkgid.uuid)
+  end
+  for d in readdir(Pkg.stdlib_dir())
+    proj = joinpath(Pkg.stdlib_dir(), d, "Project.toml")
+    if isfile(proj)
+      p = TOML.parsefile(proj)
+      get(p, "name", "") == name && return p["uuid"]
+    end
+  end
+  manifest = joinpath(dirname(Base.active_project()), "Manifest.toml")
+  if isfile(manifest)
+    m = TOML.parsefile(manifest)
+    deps = get(m, "deps", Dict())
+    if haskey(deps, name) && !isempty(deps[name])
+      return deps[name][1]["uuid"]
+    end
+  end
+  nothing
+end
+
+"Create a synthetic package for compilecache"
+function create_cache_package(path::String, hash::String, name::String)
+  pkg_dir = joinpath(cache, hash)
+  src_dir = joinpath(pkg_dir, "src")
+  mkpath(src_dir)
+  uuid = deterministic_uuid(hash)
+
+  source = read(path, String)
+  use_pkgs = find_use_packages(source)
+  has_kip_macros = occursin(r"@use\b|@dirname\b", source)
+
+  # Build [deps] section with UUIDs for any Julia packages referenced by @use
+  deps_toml = ""
+  if !isempty(use_pkgs)
+    deps_lines = String[]
+    for pkg in use_pkgs
+      pkg_uuid = find_pkg_uuid(pkg)
+      !isnothing(pkg_uuid) && push!(deps_lines, "$pkg = \"$pkg_uuid\"")
+    end
+    if !isempty(deps_lines)
+      deps_toml = "\n[deps]\n" * join(deps_lines, "\n") * "\n"
+    end
+  end
+
+  write(joinpath(pkg_dir, "Project.toml"), """
+  name = "$name"
+  uuid = "$uuid"
+  $deps_toml""")
+
+  # Resolve manifest if we have Julia package deps and no Manifest yet
+  if !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml"))
+    try
+      Pkg.activate(pkg_dir) do
+        Pkg.resolve()
+      end
+    catch e
+      @debug "Pkg.resolve failed for cache package" exception=e
+    end
+  end
+
+  # Generate wrapper source
+  if has_kip_macros
+    # Inject Kip via Base.require(PkgId) to bypass manifest check
+    write(joinpath(src_dir, "$name.jl"), """
+    module $name
+    const _Kip = Base.require(Base.PkgId(Base.UUID("$kip_uuid"), "Kip"))
+    const var"@use" = getfield(_Kip, Symbol("@use"))
+    const var"@dirname" = getfield(_Kip, Symbol("@dirname"))
+    const require = getfield(_Kip, :require)
+    Base.include(@__MODULE__, $(repr(path)))
+    end
+    """)
+  else
+    write(joinpath(src_dir, "$name.jl"), """
+    module $name
+    Base.include(@__MODULE__, $(repr(path)))
+    end
+    """)
+  end
+
+  (pkg_dir, Base.PkgId(uuid, name))
+end
+
+"Try to load a module from the compile cache"
+function load_from_cache(path::String, name::String)
+  hash = content_hash(path)
+  cache_name = "⭒" * replace(name, r"[^\w]" => "_") * "_" * hash[1:12]
+  pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
+
+  # Skip if previously marked as non-precompilable
+  nocompile_marker = joinpath(cache, hash, ".noprecompile")
+  isfile(nocompile_marker) && return nothing
+
+  # Check for existing compiled cache
+  cache_dir = Base.compilecache_dir(pkg_id)
+  if isdir(cache_dir)
+    for f in readdir(cache_dir)
+      endswith(f, ".ji") || continue
+      ji_path = joinpath(cache_dir, f)
+      ocache = Base.ocachefile_from_cachefile(ji_path)
+      ocache_path = isfile(ocache) ? ocache : nothing
+      try
+        return Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
+      catch
+        # Stale cache, recompile
+        rm(ji_path, force=true)
+        !isnothing(ocache_path) && rm(ocache_path, force=true)
+      end
+    end
+  end
+
+  # No valid cache found, compile
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name)
+  src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
+  # Push cache package onto LOAD_PATH so subprocess can resolve deps
+  pushfirst!(LOAD_PATH, pkg_dir)
+  try
+    ji_path, ocache_path = Base.compilecache(pkg_id, src_path)
+    return Base._require_from_serialized(pkg_id, ji_path, ocache_path, src_path)
+  catch e
+    # Mark as non-precompilable so we don't retry
+    mkpath(dirname(nocompile_marker))
+    write(nocompile_marker, string(e))
+    rethrow()
+  finally
+    popfirst!(LOAD_PATH)
+  end
+end
+
+function load_module(path, name)
   haskey(modules, path) && return modules[path]
-  mod = get_module(path, name)
-  Core.eval(mod, Expr(:toplevel, [:(const $k = $v) for (k,v) in locals]...))
-  Base.include(mod, path)
+  mod = try
+    load_from_cache(path, name)
+  catch e
+    # Inside a compilecache subprocess, don't fall back to get_module+include
+    # because creating anonymous modules breaks incremental compilation
+    Base.generating_output() && rethrow()
+    @debug "Cache compilation failed for $path, falling back to include" exception=e
+    nothing
+  end
+  if isnothing(mod)
+    # Inside a compilecache subprocess, we can't fall back to get_module+include
+    # because creating anonymous modules via eval breaks incremental compilation
+    Base.generating_output() && error("Cannot precompile $path: cache compilation failed or was skipped")
+    mod = get_module(path, name)
+    Base.include(mod, path)
+  end
+  modules[path] = mod
   mod
 end
 
