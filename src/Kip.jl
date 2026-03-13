@@ -509,9 +509,7 @@ function load_from_cache(path::String, name::String)
   cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
-  # Skip if previously marked as non-precompilable
   nocompile_marker = joinpath(cache, hash, ".noprecompile")
-  isfile(nocompile_marker) && return nothing
 
   # Ensure deps' cache dirs are on LOAD_PATH before loading from cache
   # (needed for _require_from_serialized to locate dependency modules)
@@ -554,10 +552,13 @@ function load_from_cache(path::String, name::String)
     ji_path, ocache_path = Base.compilecache(pkg_id, src_path)
     return Base._require_from_serialized(pkg_id, ji_path, ocache_path, src_path)
   catch e
-    # Mark as non-precompilable so we don't retry
-    mkpath(dirname(nocompile_marker))
-    bt = catch_backtrace()
-    write(nocompile_marker, sprint(showerror, e, bt))
+    # Only mark as non-precompilable for errors that indicate the module
+    # is fundamentally incompatible (e.g. eval into closed module, method overwrites)
+    err_str = sprint(showerror, e)
+    if occursin("Evaluation into", err_str) || occursin("overwritten in", err_str)
+      mkpath(dirname(nocompile_marker))
+      write(nocompile_marker, err_str)
+    end
     rethrow()
   finally
     if isnothing(old_auto)
