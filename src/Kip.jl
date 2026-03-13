@@ -326,41 +326,63 @@ end
 "Scan source for @use path patterns and return resolved local file paths"
 function find_use_paths(source::String, base::String)
   paths = String[]
+  use_prefix = nothing  # tracks prefix from @use "prefix" [ ... ] blocks
   for line in split(source, "\n")
     line = strip(line)
-    m = match(r"^@use\s+\"([^\"]+)\"", line)
-    isnothing(m) && continue
-    p = m[1]
-    if occursin(absolute_path, p)
-      push_unique!(paths, first(complete(p)))
-    elseif occursin(relative_path, p)
-      push_unique!(paths, first(complete(normpath(base, p))))
-    else
-      # Handle github.com URLs
-      gm = match(gh_shorthand, p)
-      if !isnothing(gm)
-        username, reponame, tag, subpath = gm.captures
-        pkgn = splitext(reponame)[1]
-        try
-          repo = getrepo(username, reponame)
-          if !is_pkg3_pkg(LibGit2.path(repo))
-            package = checkout_repo(repo, username, reponame, tag)
-            file, _ = if isnothing(subpath)
-              complete(package, pkgn)
-            else
-              complete(joinpath(package, subpath))
-            end
-            push_unique!(paths, file)
-          end
-        catch e
-          @debug "Failed to resolve github dep $p" exception=e
-        end
+    # Track @use "prefix" [ bracket blocks
+    bm = match(r"^@use\s+\"([^\"]+)\"\s*\[", line)
+    if !isnothing(bm)
+      use_prefix = bm[1]
+      continue
+    end
+    if !isnothing(use_prefix) && startswith(line, "]")
+      use_prefix = nothing
+      continue
+    end
+    # Match sub-paths inside bracket block: "subpath" ...
+    if !isnothing(use_prefix)
+      sm = match(r"^\"([^\"]+)\"", line)
+      if !isnothing(sm)
+        p = normpath(use_prefix, sm[1])
+        resolve_use_path!(paths, p, base)
+        continue
       end
     end
+    m = match(r"^@use\s+\"([^\"]+)\"", line)
+    isnothing(m) && continue
+    resolve_use_path!(paths, m[1], base)
   end
   paths
 end
 push_unique!(v, x) = x ∉ v && push!(v, x)
+
+function resolve_use_path!(paths, p, base)
+  if occursin(absolute_path, p)
+    push_unique!(paths, first(complete(p)))
+  elseif occursin(relative_path, p)
+    push_unique!(paths, first(complete(normpath(base, p))))
+  else
+    gm = match(gh_shorthand, p)
+    if !isnothing(gm)
+      username, reponame, tag, subpath = gm.captures
+      pkgn = splitext(reponame)[1]
+      try
+        repo = getrepo(username, reponame)
+        if !is_pkg3_pkg(LibGit2.path(repo))
+          package = checkout_repo(repo, username, reponame, tag)
+          file, _ = if isnothing(subpath)
+            complete(package, pkgn)
+          else
+            complete(joinpath(package, subpath))
+          end
+          push_unique!(paths, file)
+        end
+      catch e
+        @debug "Failed to resolve github dep $p" exception=e
+      end
+    end
+  end
+end
 
 """
 Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PATH
