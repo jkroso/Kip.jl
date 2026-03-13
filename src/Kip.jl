@@ -323,9 +323,9 @@ function find_use_packages(source::String)
   pkgs
 end
 
-"Scan source for @use path patterns and return resolved local file paths"
-function find_use_paths(source::String, base::String)
-  paths = String[]
+"Scan source for @use path patterns and return resolved (path, name) pairs"
+function find_use_deps(source::String, base::String)
+  deps = Tuple{String,String}[]
   use_prefix = nothing  # tracks prefix from @use "prefix" [ ... ] blocks
   for line in split(source, "\n")
     line = strip(line)
@@ -344,23 +344,24 @@ function find_use_paths(source::String, base::String)
       sm = match(r"^\"([^\"]+)\"", line)
       if !isnothing(sm)
         p = normpath(use_prefix, sm[1])
-        resolve_use_path!(paths, p, base)
+        resolve_use_dep!(deps, p, base)
         continue
       end
     end
     m = match(r"^@use\s+\"([^\"]+)\"", line)
     isnothing(m) && continue
-    resolve_use_path!(paths, m[1], base)
+    resolve_use_dep!(deps, m[1], base)
   end
-  paths
+  deps
 end
-push_unique!(v, x) = x ∉ v && push!(v, x)
 
-function resolve_use_path!(paths, p, base)
+function resolve_use_dep!(deps, p, base)
   if occursin(absolute_path, p)
-    push_unique!(paths, first(complete(p)))
+    path, name = complete(p)
+    any(d -> d[1] == path, deps) || push!(deps, (path, name))
   elseif occursin(relative_path, p)
-    push_unique!(paths, first(complete(normpath(base, p))))
+    path, name = complete(normpath(base, p))
+    any(d -> d[1] == path, deps) || push!(deps, (path, name))
   else
     gm = match(gh_shorthand, p)
     if !isnothing(gm)
@@ -370,12 +371,12 @@ function resolve_use_path!(paths, p, base)
         repo = getrepo(username, reponame)
         if !is_pkg3_pkg(LibGit2.path(repo))
           package = checkout_repo(repo, username, reponame, tag)
-          file, _ = if isnothing(subpath)
+          path, name = if isnothing(subpath)
             complete(package, pkgn)
           else
             complete(joinpath(package, subpath))
           end
-          push_unique!(paths, file)
+          any(d -> d[1] == path, deps) || push!(deps, (path, name))
         end
       catch e
         @debug "Failed to resolve github dep $p" exception=e
@@ -392,14 +393,13 @@ function precompile_deps!(path::String)
   dirs = String[]
   source = read(path, String)
   base = dirname(path)
-  for dep_path in find_use_paths(source, base)
+  for (dep_path, dep_name) in find_use_deps(source, base)
     # Recursively pre-compile this dep's deps first
     append!(dirs, precompile_deps!(dep_path))
     # Now compile this dep (load_from_cache handles caching/noprecompile)
     dep_source = read(dep_path, String)
     hash = source_hash(dep_source)
-    dep_name = replace(pkgname(dep_path), r"[^\w]" => "_")
-    cache_name = valid_identifier(dep_name * "_" * hash[1:12])
+    cache_name = valid_identifier(replace(dep_name, r"[^\w]" => "_") * "_" * hash[1:12])
     pkg_dir = joinpath(cache, hash)
     # Ensure the cache package dir exists and is on LOAD_PATH
     if !isdir(joinpath(pkg_dir, "src"))
@@ -582,7 +582,7 @@ function load_module(path, name)
     # Inside a compilecache subprocess, don't fall back to get_module+include
     # because creating anonymous modules breaks incremental compilation
     Base.generating_output() && rethrow()
-    @debug "Cache compilation failed for $path, falling back to include" exception=e
+    @warn "Cache compilation failed for $path, falling back to include" exception=(e, catch_backtrace())
     nothing
   end
   if isnothing(mod)
