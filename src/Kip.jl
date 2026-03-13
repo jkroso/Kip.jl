@@ -491,8 +491,16 @@ function load_from_cache(path::String, name::String)
   nocompile_marker = joinpath(cache, hash, ".noprecompile")
   isfile(nocompile_marker) && return nothing
 
-  # Check for existing compiled cache
+  # Ensure deps' cache dirs are on LOAD_PATH before loading from cache
+  # (needed for _require_from_serialized to locate dependency modules)
+  dep_dirs = precompile_deps!(path)
   pkg_dir = joinpath(cache, hash)
+  if pkg_dir ∉ LOAD_PATH
+    pushfirst!(LOAD_PATH, pkg_dir)
+    push!(dep_dirs, pkg_dir)
+  end
+
+  # Check for existing compiled cache
   cache_dir = Base.compilecache_dir(pkg_id)
   if isdir(cache_dir)
     for f in readdir(cache_dir)
@@ -502,11 +510,8 @@ function load_from_cache(path::String, name::String)
       ocache_path = isfile(ocache) ? ocache : nothing
       try
         mod = Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
-        # In a compilecache subprocess, ensure the cache package is on LOAD_PATH
-        # so Julia can locate this dep's source when serializing the parent module
         if Base.generating_output()
           isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name, source)
-          pushfirst!(LOAD_PATH, pkg_dir)
         end
         return mod
       catch
@@ -518,13 +523,8 @@ function load_from_cache(path::String, name::String)
   end
 
   # No valid cache found, compile
-  # Pre-compile path-based @use deps so their cache dirs are on LOAD_PATH
-  # when _require_from_serialized loads this module's .ji and its deps
-  dep_dirs = precompile_deps!(path)
   pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
-  # Push cache package onto LOAD_PATH so subprocess can resolve deps
-  pushfirst!(LOAD_PATH, pkg_dir)
   # Suppress Pkg auto-precompilation noise in the compilecache subprocess
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
