@@ -357,7 +357,7 @@ function precompile_deps!(path::String)
     # Now compile this dep (load_from_cache handles caching/noprecompile)
     hash = content_hash(dep_path)
     dep_name = replace(splitext(basename(dep_path))[1], r"[^\w]" => "_")
-    cache_name = "⭒" * dep_name * "_" * hash[1:12]
+    cache_name = dep_name * "_" * hash[1:12]
     pkg_dir = joinpath(cache, hash)
     # Ensure the cache package dir exists and is on LOAD_PATH
     if !isdir(joinpath(pkg_dir, "src"))
@@ -471,7 +471,7 @@ end
 "Try to load a module from the compile cache"
 function load_from_cache(path::String, name::String)
   hash = content_hash(path)
-  cache_name = "⭒" * replace(name, r"[^\w]" => "_") * "_" * hash[1:12]
+  cache_name = replace(name, r"[^\w]" => "_") * "_" * hash[1:12]
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
   # Skip if previously marked as non-precompilable
