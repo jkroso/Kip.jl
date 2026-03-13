@@ -1,7 +1,6 @@
 __precompile__(true)
 
 module Kip # start of module
-using Pkg
 using ProgressMeter
 using MacroTools
 using Git
@@ -11,12 +10,18 @@ import SHA
 
 include("./deps.jl")
 
+const _Pkg = Ref{Module}()
+function pkg()
+  isassigned(_Pkg) || (_Pkg[] = Base.require(Base.PkgId(Base.UUID("44cfe95a-1eb2-52ea-b672-e2afdf69b78f"), "Pkg")))
+  _Pkg[]
+end
+
 __init__() = begin
   global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
   global cache = joinpath(home, "cache")
-  global stdlib = Set(readdir(Pkg.stdlib_dir()))
+  global stdlib = Set(readdir(Sys.STDLIB))
 end
 
 const absolute_path = r"^/"
@@ -197,13 +202,13 @@ function require(path::AbstractString, base::AbstractString)
     repo = getrepo(username, reponame)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
-        Pkg.activate(base) do
+        pkg().activate(base) do
           if is_installed(base, pkgname)
             update_pkg(repo, tag)
           else
             add_pkg(repo, tag)
           end
-          deps = Pkg.TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
+          deps = TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
           uuid = Base.UUID(deps[pkgname])
           Base.require(Base.PkgId(uuid, pkgname))
         end
@@ -222,13 +227,13 @@ end
 
 function is_installed(base, pkgname)
   file = joinpath(base, "Project.toml")
-  isfile(file) && haskey(Pkg.TOML.parsefile(file)["deps"], pkgname)
+  isfile(file) && haskey(TOML.parsefile(file)["deps"], pkgname)
 end
 
 function add_pkg(repo, tag)
   remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
   url = String(split(string(remote), ' ')[end])
-  Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
+  pkg().add(pkg().PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
 end
 
 function update_pkg(repo, tag)
@@ -255,7 +260,7 @@ function is_pkg3_pkg(dir::String)
     path = joinpath(dir, file)
     isfile(path) || return false
     file == "REQUIRE" && return true
-    haskey(Pkg.TOML.parsefile(path), "name")
+    haskey(TOML.parsefile(path), "name")
   end
 end
 
@@ -376,8 +381,8 @@ function find_pkg_uuid(name::String)
   for (pkgid, _) in Base.loaded_modules
     pkgid.name == name && return string(pkgid.uuid)
   end
-  for d in readdir(Pkg.stdlib_dir())
-    proj = joinpath(Pkg.stdlib_dir(), d, "Project.toml")
+  for d in readdir(Sys.STDLIB)
+    proj = joinpath(Sys.STDLIB, d, "Project.toml")
     if isfile(proj)
       p = TOML.parsefile(proj)
       get(p, "name", "") == name && return p["uuid"]
@@ -430,9 +435,9 @@ function create_cache_package(path::String, hash::String, name::String)
     try
       old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
       ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
-      Pkg.activate(pkg_dir) do
+      pkg().activate(pkg_dir) do
         redirect_stderr(devnull) do
-          Pkg.resolve(io=devnull)
+          pkg().resolve(io=devnull)
         end
       end
       if isnothing(old_auto)
@@ -622,8 +627,8 @@ macro use(first, rest...)
       old = Base.ACTIVE_PROJECT[]
       Base.ACTIVE_PROJECT[] = @dirname()
       if !Base.generating_output()
-        installed($(string(pkg))) || Pkg.add($(string(pkg)))
-        Pkg.instantiate()
+        installed($(string(pkg))) || pkg().add($(string(pkg)))
+        pkg().instantiate()
       end
       $(esc(Meta.parse(str)))
       Base.ACTIVE_PROJECT[] = old
