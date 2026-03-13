@@ -428,8 +428,17 @@ function create_cache_package(path::String, hash::String, name::String)
   # uses a different environment without our LOAD_PATH entries
   if !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
     try
+      old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
+      ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
       Pkg.activate(pkg_dir) do
-        Pkg.resolve()
+        redirect_stderr(devnull) do
+          Pkg.resolve(io=devnull)
+        end
+      end
+      if isnothing(old_auto)
+        delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
+      else
+        ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
       end
     catch e
       @debug "Pkg.resolve failed for cache package" exception=e
