@@ -300,20 +300,25 @@ end
 content_hash(path::String) = source_hash(read(path))
 source_hash(source) = bytes2hex(SHA.sha256(source))
 
+"Ensure a string is a valid Julia identifier (starts with a letter)"
+valid_identifier(s::String) = occursin(r"^[A-Za-z]", s) ? s : "M_" * s
+
 const kip_uuid = "c32b5c58-9bcc-11e8-1f8b-492a5c8a885c"
 
-"Scan source for @use PkgName patterns and return package names"
+"Scan source for package dependencies (@use PkgName, using, import)"
 function find_use_packages(source::String)
   pkgs = String[]
   for line in split(source, "\n")
     line = strip(line)
     # Match @use PkgName, @use PkgName:..., @use PkgName.sub, @use PkgName name1 name2
-    # Package names start with uppercase; paths start with "
     m = match(r"^@use\s+([A-Z]\w*)", line)
     !isnothing(m) && m[1] ∉ pkgs && push!(pkgs, m[1])
     # Also match @use (PkgName.sub)
     m2 = match(r"^@use\s+\(?([A-Z]\w*)[\.\)]", line)
     !isnothing(m2) && m2[1] ∉ pkgs && push!(pkgs, m2[1])
+    # Match using/import PkgName
+    m3 = match(r"^(?:using|import)\s+([A-Z]\w*)", line)
+    !isnothing(m3) && m3[1] ∉ pkgs && push!(pkgs, m3[1])
   end
   pkgs
 end
@@ -372,7 +377,7 @@ function precompile_deps!(path::String)
     dep_source = read(dep_path, String)
     hash = source_hash(dep_source)
     dep_name = replace(splitext(basename(dep_path))[1], r"[^\w]" => "_")
-    cache_name = dep_name * "_" * hash[1:12]
+    cache_name = valid_identifier(dep_name * "_" * hash[1:12])
     pkg_dir = joinpath(cache, hash)
     # Ensure the cache package dir exists and is on LOAD_PATH
     if !isdir(joinpath(pkg_dir, "src"))
@@ -479,7 +484,7 @@ end
 function load_from_cache(path::String, name::String)
   source = read(path, String)
   hash = source_hash(source)
-  cache_name = replace(name, r"[^\w]" => "_") * "_" * hash[1:12]
+  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
   # Skip if previously marked as non-precompilable
