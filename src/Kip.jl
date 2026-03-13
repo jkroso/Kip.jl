@@ -582,7 +582,7 @@ function load_module(path, name)
     # Inside a compilecache subprocess, don't fall back to get_module+include
     # because creating anonymous modules breaks incremental compilation
     Base.generating_output() && rethrow()
-    @warn "Cache compilation failed for $path, falling back to include" exception=(e, catch_backtrace())
+    @debug "Cache compilation failed for $path, falling back to include" exception=e
     nothing
   end
   if isnothing(mod)
