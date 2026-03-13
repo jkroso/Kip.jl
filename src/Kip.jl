@@ -621,8 +621,10 @@ macro use(first, rest...)
     return quote
       old = Base.ACTIVE_PROJECT[]
       Base.ACTIVE_PROJECT[] = @dirname()
-      installed($(string(pkg))) || Pkg.add($(string(pkg)))
-      Pkg.instantiate()
+      if !Base.generating_output()
+        installed($(string(pkg))) || Pkg.add($(string(pkg)))
+        Pkg.instantiate()
+      end
       $(esc(Meta.parse(str)))
       Base.ACTIVE_PROJECT[] = old
     end
