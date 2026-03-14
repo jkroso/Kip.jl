@@ -116,7 +116,14 @@ build() = run(`julia --startup-file=no build.jl`)
 pkgname(path::AbstractString) = begin
   name = if basename(path) == "main.jl"
     dir = basename(dirname(path))
-    dir == "src" ? basename(dirname(dirname(path))) : dir
+    if dir == "src"
+      basename(dirname(dirname(path)))
+    elseif occursin(r"^[0-9a-f]{40}$", dir)
+      # Skip git commit hash directories (e.g. ~/.kip/refs/user/Repo.jl/HASH/main.jl)
+      basename(dirname(dirname(path)))
+    else
+      dir
+    end
   elseif isdirpath(path)
     basename(dirname(path))
   else
@@ -372,23 +379,29 @@ function resolve_use_dep!(deps, p, base)
     if !isnothing(gm)
       username, reponame, tag, subpath = gm.captures
       pkgn = splitext(reponame)[1]
-      try
-        repo = getrepo(username, reponame)
-        if !is_pkg3_pkg(LibGit2.path(repo))
-          package = checkout_repo(repo, username, reponame, tag)
-          path, name = if isnothing(subpath)
-            complete(package, pkgn)
-          else
-            complete(joinpath(package, subpath))
+      # Only resolve if repo is already cloned locally (avoid blocking on git credential prompts)
+      localpath = joinpath(repos, username, reponame)
+      if isdir(localpath)
+        try
+          repo = getrepo(username, reponame)
+          if !is_pkg3_pkg(LibGit2.path(repo))
+            package = checkout_repo(repo, username, reponame, tag)
+            path, name = if isnothing(subpath)
+              complete(package, pkgn)
+            else
+              complete(joinpath(package, subpath))
+            end
+            any(d -> d[1] == path, deps) || push!(deps, (path, name))
           end
-          any(d -> d[1] == path, deps) || push!(deps, (path, name))
+        catch e
+          @debug "Failed to resolve github dep $p" exception=e
         end
-      catch e
-        @debug "Failed to resolve github dep $p" exception=e
       end
     end
   end
 end
+
+const _precompiling = Set{String}()
 
 """
 Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PATH
@@ -396,6 +409,8 @@ and their .ji files exist before we compile the parent module.
 Returns list of cache dirs added to LOAD_PATH.
 """
 function precompile_deps!(path::String)
+  path in _precompiling && return String[]
+  push!(_precompiling, path)
   dirs = String[]
   source = read(path, String)
   base = dirname(path)
@@ -416,19 +431,13 @@ function precompile_deps!(path::String)
       pushfirst!(LOAD_PATH, pkg_dir)
       push!(dirs, pkg_dir)
     end
-    # Actually compile the dep if no .ji exists yet (and not already loaded)
-    if !haskey(Base.loaded_modules, pkg_id)
-      cache_dir = Base.compilecache_dir(pkg_id)
-      has_ji = isdir(cache_dir) && any(endswith(".ji"), readdir(cache_dir))
-      if !has_ji
-        src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
-        if isfile(src_path)
-          try
-            Base.compilecache(pkg_id, src_path, devnull)
-          catch
-            # Compilation failed; parent will also fail or fall back
-          end
-        end
+    # In the main process, fully compile deps so their .ji files exist
+    # before the parent's compilecache subprocess needs them
+    if !Base.generating_output() && !haskey(modules, dep_path)
+      try
+        load_module(dep_path, dep_name)
+      catch
+        # Compilation failed; parent will also fail or fall back
       end
     end
   end
@@ -583,9 +592,11 @@ function load_from_cache(path::String, name::String)
   # No valid cache found, compile
   pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
-  # Suppress Pkg auto-precompilation noise in the compilecache subprocess
+  # Suppress Pkg auto-precompilation noise and git credential prompts in the compilecache subprocess
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
+  old_git_prompt = get(ENV, "GIT_TERMINAL_PROMPT", nothing)
   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
+  ENV["GIT_TERMINAL_PROMPT"] = "0"
   stderr_buf = IOBuffer()
   try
     ji_path, ocache_path = Base.compilecache(pkg_id, src_path, stderr_buf)
@@ -609,6 +620,11 @@ function load_from_cache(path::String, name::String)
       delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
     else
       ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
+    end
+    if isnothing(old_git_prompt)
+      delete!(ENV, "GIT_TERMINAL_PROMPT")
+    else
+      ENV["GIT_TERMINAL_PROMPT"] = old_git_prompt
     end
     # In a compilecache subprocess, keep cache dirs on LOAD_PATH so Julia can
     # locate dependency sources when serializing the parent module
