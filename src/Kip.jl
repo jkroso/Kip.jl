@@ -351,6 +351,11 @@ function find_use_deps(source::String, base::String)
     m = match(r"^@use\s+\"([^\"]+)\"", line)
     isnothing(m) && continue
     resolve_use_dep!(deps, m[1], base)
+    # Also extract inline bracket subpaths: ["subpath" ...] on the same line
+    for bm in eachmatch(r"\[\"([^\"]+)\"", line)
+      p = normpath(m[1], bm[1])
+      resolve_use_dep!(deps, p, base)
+    end
   end
   deps
 end
@@ -387,7 +392,8 @@ end
 
 """
 Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PATH
-before we compile the parent module. Returns list of cache dirs added to LOAD_PATH.
+and their .ji files exist before we compile the parent module.
+Returns list of cache dirs added to LOAD_PATH.
 """
 function precompile_deps!(path::String)
   dirs = String[]
@@ -401,6 +407,7 @@ function precompile_deps!(path::String)
     hash = source_hash(dep_source)
     cache_name = valid_identifier(replace(dep_name, r"[^\w]" => "_") * "_" * hash[1:12])
     pkg_dir = joinpath(cache, hash)
+    pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
     # Ensure the cache package dir exists and is on LOAD_PATH
     if !isdir(joinpath(pkg_dir, "src"))
       create_cache_package(dep_path, hash, cache_name, dep_source)
@@ -409,11 +416,26 @@ function precompile_deps!(path::String)
       pushfirst!(LOAD_PATH, pkg_dir)
       push!(dirs, pkg_dir)
     end
+    # Actually compile the dep if no .ji exists yet (and not already loaded)
+    if !haskey(Base.loaded_modules, pkg_id)
+      cache_dir = Base.compilecache_dir(pkg_id)
+      has_ji = isdir(cache_dir) && any(endswith(".ji"), readdir(cache_dir))
+      if !has_ji
+        src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
+        if isfile(src_path)
+          try
+            Base.compilecache(pkg_id, src_path, devnull)
+          catch
+            # Compilation failed; parent will also fail or fall back
+          end
+        end
+      end
+    end
   end
   dirs
 end
 
-"Look up a package's UUID from loaded modules, stdlib, or the environment manifest"
+"Look up a package's UUID from loaded modules, stdlib, the environment manifest, or the registry"
 function find_pkg_uuid(name::String)
   haskey(stdlib_uuids, name) && return stdlib_uuids[name]
   for (pkgid, _) in Base.loaded_modules
@@ -426,6 +448,16 @@ function find_pkg_uuid(name::String)
     if haskey(deps, name) && !isempty(deps[name])
       return deps[name][1]["uuid"]
     end
+  end
+  # Search registries (use invokelatest to avoid world age issues in compilecache subprocesses)
+  try
+    Reg = pkg().Registry
+    for reg in Base.invokelatest(Reg.reachable_registries)
+      for uuid in Base.invokelatest(Reg.uuids_from_name, reg, name)
+        return string(uuid)
+      end
+    end
+  catch
   end
   nothing
 end
@@ -511,6 +543,12 @@ function load_from_cache(path::String, name::String)
 
   nocompile_marker = joinpath(cache, hash, ".noprecompile")
 
+  # If this module was already loaded as a transitive dependency of another module
+  # (e.g. BitSet loaded Enum via _require_from_serialized), return it directly
+  if haskey(Base.loaded_modules, pkg_id)
+    return Base.loaded_modules[pkg_id]
+  end
+
   # Ensure deps' cache dirs are on LOAD_PATH before loading from cache
   # (needed for _require_from_serialized to locate dependency modules)
   dep_dirs = precompile_deps!(path)
@@ -548,14 +586,20 @@ function load_from_cache(path::String, name::String)
   # Suppress Pkg auto-precompilation noise in the compilecache subprocess
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
+  stderr_buf = IOBuffer()
   try
-    ji_path, ocache_path = Base.compilecache(pkg_id, src_path)
+    ji_path, ocache_path = Base.compilecache(pkg_id, src_path, stderr_buf)
+    # Print any non-error stderr output (warnings, etc.)
+    stderr_output = String(take!(stderr_buf))
+    isempty(stderr_output) || print(stderr, stderr_output)
     return Base._require_from_serialized(pkg_id, ji_path, ocache_path, src_path)
   catch e
     # Only mark as non-precompilable for errors that indicate the module
     # is fundamentally incompatible (e.g. eval into closed module, method overwrites)
-    err_str = sprint(showerror, e)
-    if occursin("Evaluation into", err_str) || occursin("overwritten in", err_str)
+    stderr_output = String(take!(stderr_buf))
+    isempty(stderr_output) || print(stderr, stderr_output)
+    err_str = try sprint(showerror, e) catch; string(e) end * "\n" * stderr_output
+    if occursin("Evaluation into", err_str) || occursin("overwritten in", err_str) || occursin("Method overwriting", err_str)
       mkpath(dirname(nocompile_marker))
       write(nocompile_marker, err_str)
     end
@@ -582,7 +626,7 @@ function load_module(path, name)
     # Inside a compilecache subprocess, don't fall back to get_module+include
     # because creating anonymous modules breaks incremental compilation
     Base.generating_output() && rethrow()
-    @debug "Cache compilation failed for $path, falling back to include" exception=e
+    @warn "Cache compilation failed for $path, falling back to include" exception=e
     nothing
   end
   if isnothing(mod)
