@@ -7,14 +7,9 @@ using Git
 import LibGit2
 import TOML
 import SHA
+import Pkg
 
 include("./deps.jl")
-
-const _Pkg = Ref{Module}()
-function pkg()
-  isassigned(_Pkg) || (_Pkg[] = Base.require(Base.PkgId(Base.UUID("44cfe95a-1eb2-52ea-b672-e2afdf69b78f"), "Pkg")))
-  _Pkg[]
-end
 
 __init__() = begin
   global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
@@ -217,7 +212,7 @@ function require(path::AbstractString, base::AbstractString)
     repo = getrepo(username, reponame)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
-        pkg().activate(base) do
+        Pkg.activate(base) do
           if is_installed(base, pkgname)
             update_pkg(repo, tag)
           else
@@ -248,7 +243,7 @@ end
 function add_pkg(repo, tag)
   remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
   url = String(split(string(remote), ' ')[end])
-  pkg().add(pkg().PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
+  Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
 end
 
 function update_pkg(repo, tag)
@@ -460,7 +455,7 @@ function find_pkg_uuid(name::String)
   end
   # Search registries (use invokelatest to avoid world age issues in compilecache subprocesses)
   try
-    Reg = pkg().Registry
+    Reg = Pkg.Registry
     for reg in Base.invokelatest(Reg.reachable_registries)
       for uuid in Base.invokelatest(Reg.uuids_from_name, reg, name)
         return string(uuid)
@@ -505,9 +500,9 @@ function create_cache_package(path::String, hash::String, name::String, source::
     try
       old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
       ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
-      pkg().activate(pkg_dir) do
+      Pkg.activate(pkg_dir) do
         redirect_stderr(devnull) do
-          pkg().resolve(io=devnull)
+          Pkg.resolve(io=devnull)
         end
       end
       if isnothing(old_auto)
@@ -718,8 +713,8 @@ macro use(first, rest...)
       old = Base.ACTIVE_PROJECT[]
       Base.ACTIVE_PROJECT[] = @dirname()
       if !Base.generating_output() && !installed($(string(pkg)))
-        pkg().add($(string(pkg)))
-        pkg().instantiate()
+        Pkg.add($(string(pkg)))
+        Pkg.instantiate()
       end
       $(esc(Meta.parse(str)))
       Base.ACTIVE_PROJECT[] = old
