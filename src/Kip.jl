@@ -519,11 +519,11 @@ end
 """
     compile(path::String) -> String
 
-Compile all transitive `@use` deps of a Kip entry file into a stable output
-directory derived from the file's path (consistent across runs). The entry
-file itself is not compiled — it acts as a package context.
+Compile all transitive `@use` deps of a Kip entry file. The entry file acts
+as a package context — its deps are compiled into a stable cache directory
+derived from the initial PWD, but the entry file itself is not compiled.
 
-Returns the output directory path containing all compiled dependency packages.
+Returns the resolved source path of the entry file.
 """
 function compile(path::String)
   path, name = complete(path)
@@ -554,7 +554,7 @@ function compile(path::String)
     dep_path == path && continue
     compile_single(dep_path, dep_name, env_dir; output_dir)
   end
-  output_dir
+  path
 end
 
 "Compile a single file to a .ji cache. Returns .ji path on success, .jl path on failure."
@@ -564,6 +564,9 @@ function compile_single(path::String, name::String, env_dir::Union{String,Nothin
   cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
+  # Place the synthetic package in output_dir if provided, otherwise global cache
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir, output_dir)
+
   # Already compiled? Return existing .ji
   cache_dir = Base.compilecache_dir(pkg_id)
   if isdir(cache_dir)
@@ -572,9 +575,6 @@ function compile_single(path::String, name::String, env_dir::Union{String,Nothin
       return joinpath(cache_dir, f)
     end
   end
-
-  # Place the synthetic package in output_dir if provided, otherwise global cache
-  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir, output_dir)
   if pkg_dir ∉ LOAD_PATH
     pushfirst!(LOAD_PATH, pkg_dir)
   end
@@ -932,14 +932,19 @@ macro use(first, rest...)
     str = replace(str, r"^:\({0,2}([^\)]+)\){0,2}$" => s"import \1")
     str = replace(str, r"^import (.*)\.{3}$" => s"using \1")
     return quote
-      old = Base.ACTIVE_PROJECT[]
-      Base.ACTIVE_PROJECT[] = @dirname()
       if !Base.generating_output() && !installed($(string(pkg)))
-        Pkg.add($(string(pkg)))
-        Pkg.instantiate()
+        old = Base.ACTIVE_PROJECT[]
+        Base.ACTIVE_PROJECT[] = Kip.initial_pwd
+        try
+          Pkg.add($(string(pkg)))
+        finally
+          Base.ACTIVE_PROJECT[] = old
+        end
+      end
+      if Kip.initial_pwd ∉ LOAD_PATH
+        pushfirst!(LOAD_PATH, Kip.initial_pwd)
       end
       $(esc(Meta.parse(str)))
-      Base.ACTIVE_PROJECT[] = old
     end
   end
   splatall = false
@@ -1014,8 +1019,7 @@ const empty_deps = Dict{String,Any}()
 
 installed(pkg) = begin
   pkg in stdlib && return true
-  active_dir = Base.ACTIVE_PROJECT[]
-  file = joinpath(active_dir, "Project.toml")
+  file = joinpath(initial_pwd, "Project.toml")
   ispath(file) || return false
   haskey(get(TOML.parsefile(file), "deps", empty_deps), pkg)
 end
