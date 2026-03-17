@@ -12,6 +12,7 @@ import Pkg
 include("./deps.jl")
 
 __init__() = begin
+  global initial_pwd = pwd()
   global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
@@ -518,12 +519,20 @@ end
 """
     compile(path::String) -> String
 
-Compile a Kip module (and all its transitive `@use` deps) to `.ji` files.
-Returns the `.ji` path on success, or the `.jl` source path on failure.
+Compile all transitive `@use` deps of a Kip entry file into a stable output
+directory derived from the file's path (consistent across runs). The entry
+file itself is not compiled — it acts as a package context.
+
+Returns the output directory path containing all compiled dependency packages.
 """
 function compile(path::String)
   path, name = complete(path)
   path = realpath(path)
+
+  # Derive output directory from initial PWD (stable across runs for the same project)
+  pwd_hash = bytes2hex(SHA.sha256(Vector{UInt8}(initial_pwd)))[1:16]
+  output_dir = joinpath(cache, pwd_hash)
+  mkpath(output_dir)
 
   # Walk the full dependency tree
   all_packages, file_deps, pkg3_repos = collect_all_deps(path)
@@ -540,17 +549,16 @@ function compile(path::String)
     pushfirst!(LOAD_PATH, env_dir)
   end
 
-  # Compile all deps in post-order, then the target file itself
-  last_result = path  # fallback to .jl path
+  # Compile all deps in post-order, skipping the main file itself
   for (dep_path, dep_name) in file_deps
-    result = compile_single(dep_path, dep_name, env_dir)
-    dep_path == path && (last_result = result)
+    dep_path == path && continue
+    compile_single(dep_path, dep_name, env_dir; output_dir)
   end
-  last_result
+  output_dir
 end
 
 "Compile a single file to a .ji cache. Returns .ji path on success, .jl path on failure."
-function compile_single(path::String, name::String, env_dir::Union{String,Nothing})
+function compile_single(path::String, name::String, env_dir::Union{String,Nothing}; output_dir::Union{String,Nothing}=nothing)
   source = read(path, String)
   hash = source_hash(source)
   cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
@@ -565,8 +573,8 @@ function compile_single(path::String, name::String, env_dir::Union{String,Nothin
     end
   end
 
-  # Create cache package with manifest symlink
-  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir)
+  # Place the synthetic package in output_dir if provided, otherwise global cache
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir, output_dir)
   if pkg_dir ∉ LOAD_PATH
     pushfirst!(LOAD_PATH, pkg_dir)
   end
@@ -676,8 +684,8 @@ function find_pkg_uuid(name::String)
 end
 
 "Create a synthetic package for compilecache"
-function create_cache_package(path::String, hash::String, name::String, source::String=read(path, String); env_dir::Union{String,Nothing}=nothing)
-  pkg_dir = joinpath(cache, hash)
+function create_cache_package(path::String, hash::String, name::String, source::String=read(path, String); env_dir::Union{String,Nothing}=nothing, output_dir::Union{String,Nothing}=nothing)
+  pkg_dir = joinpath(something(output_dir, cache), hash)
   src_dir = joinpath(pkg_dir, "src")
   mkpath(src_dir)
   uuid = deterministic_uuid(hash)
@@ -843,7 +851,7 @@ function load_from_cache(path::String, name::String)
   end
 end
 
-function load_module(path, name)
+function load_module(path, name=pkgname(path))
   haskey(modules, path) && return modules[path]
   mod = try
     load_from_cache(path, name)
