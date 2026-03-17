@@ -515,6 +515,93 @@ function resolve_environment(all_packages::Set{String}, pkg3_repos::Vector{Strin
   env_dir
 end
 
+"""
+    compile(path::String) -> String
+
+Compile a Kip module (and all its transitive `@use` deps) to `.ji` files.
+Returns the `.ji` path on success, or the `.jl` source path on failure.
+"""
+function compile(path::String)
+  path, name = complete(path)
+  path = realpath(path)
+
+  # Walk the full dependency tree
+  all_packages, file_deps, pkg3_repos = collect_all_deps(path)
+
+  # Create unified environment for all Julia package deps
+  env_dir = if isempty(all_packages) && isempty(pkg3_repos)
+    nothing
+  else
+    resolve_environment(all_packages, pkg3_repos)
+  end
+
+  # Set up LOAD_PATH so compilecache subprocesses can find everything
+  if !isnothing(env_dir) && env_dir ∉ LOAD_PATH
+    pushfirst!(LOAD_PATH, env_dir)
+  end
+
+  # Compile all deps in post-order, then the target file itself
+  last_result = path  # fallback to .jl path
+  for (dep_path, dep_name) in file_deps
+    result = compile_single(dep_path, dep_name, env_dir)
+    dep_path == path && (last_result = result)
+  end
+  last_result
+end
+
+"Compile a single file to a .ji cache. Returns .ji path on success, .jl path on failure."
+function compile_single(path::String, name::String, env_dir::Union{String,Nothing})
+  source = read(path, String)
+  hash = source_hash(source)
+  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
+  pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
+
+  # Already compiled? Return existing .ji
+  cache_dir = Base.compilecache_dir(pkg_id)
+  if isdir(cache_dir)
+    for f in readdir(cache_dir)
+      endswith(f, ".ji") || continue
+      return joinpath(cache_dir, f)
+    end
+  end
+
+  # Create cache package with manifest symlink
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir)
+  if pkg_dir ∉ LOAD_PATH
+    pushfirst!(LOAD_PATH, pkg_dir)
+  end
+
+  # Compile
+  src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
+  old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
+  old_git_prompt = get(ENV, "GIT_TERMINAL_PROMPT", nothing)
+  ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
+  ENV["GIT_TERMINAL_PROMPT"] = "0"
+  stderr_buf = IOBuffer()
+  try
+    ji_path, _ = Base.compilecache(pkg_id, src_path, stderr_buf)
+    stderr_output = String(take!(stderr_buf))
+    isempty(stderr_output) || print(stderr, stderr_output)
+    return ji_path
+  catch e
+    stderr_output = String(take!(stderr_buf))
+    isempty(stderr_output) || print(stderr, stderr_output)
+    @warn "Compilation failed for $path" exception=e
+    return path
+  finally
+    if isnothing(old_auto)
+      delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
+    else
+      ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
+    end
+    if isnothing(old_git_prompt)
+      delete!(ENV, "GIT_TERMINAL_PROMPT")
+    else
+      ENV["GIT_TERMINAL_PROMPT"] = old_git_prompt
+    end
+  end
+end
+
 const _precompiling = Set{String}()
 const _resolved_entries = Dict{String, Tuple{String, String}}()  # entry_path => (env_dir, content_hash)
 const _current_env_dir = Ref{Union{String,Nothing}}(nothing)  # set by ensure_environment!, read by load_from_cache
@@ -589,7 +676,7 @@ function find_pkg_uuid(name::String)
 end
 
 "Create a synthetic package for compilecache"
-function create_cache_package(path::String, hash::String, name::String, source::String=read(path, String))
+function create_cache_package(path::String, hash::String, name::String, source::String=read(path, String); env_dir::Union{String,Nothing}=nothing)
   pkg_dir = joinpath(cache, hash)
   src_dir = joinpath(pkg_dir, "src")
   mkpath(src_dir)
@@ -615,10 +702,15 @@ function create_cache_package(path::String, hash::String, name::String, source::
   uuid = "$uuid"
   $deps_toml""")
 
-  # Resolve manifest if we have Julia package deps and no Manifest yet
-  # Skip in compilecache subprocess — Pkg.resolve triggers auto-precompilation that
-  # uses a different environment without our LOAD_PATH entries
-  if !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
+  # Symlink unified Manifest.toml so compilecache subprocess can find packages
+  if !isnothing(env_dir)
+    manifest_src = joinpath(env_dir, "Manifest.toml")
+    manifest_dest = joinpath(pkg_dir, "Manifest.toml")
+    if isfile(manifest_src) && !isfile(manifest_dest)
+      symlink(manifest_src, manifest_dest)
+    end
+  elseif !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
+    # Fallback: per-module Pkg.resolve when no unified env is available
     try
       old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
       ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
@@ -929,6 +1021,6 @@ tovcat(n) =
   end
 torow(n) = Meta.isexpr(n, :row) ? n : Expr(:row, n)
 
-export @use, @dirname
+export @use, @dirname, compile
 
 end # end of module
