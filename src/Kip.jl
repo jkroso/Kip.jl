@@ -375,23 +375,19 @@ function resolve_use_dep!(deps, p, base)
     if !isnothing(gm)
       username, reponame, tag, subpath = gm.captures
       pkgn = splitext(reponame)[1]
-      # Only resolve if repo is already cloned locally (avoid blocking on git credential prompts)
-      localpath = joinpath(repos, username, reponame)
-      if isdir(localpath)
-        try
-          repo = getrepo(username, reponame)
-          if !is_pkg3_pkg(LibGit2.path(repo))
-            package = checkout_repo(repo, username, reponame, tag)
-            path, name = if isnothing(subpath)
-              complete(package, pkgn)
-            else
-              complete(joinpath(package, subpath))
-            end
-            any(d -> d[1] == path, deps) || push!(deps, (path, name))
+      try
+        repo = getrepo(username, reponame)
+        if !is_pkg3_pkg(LibGit2.path(repo))
+          package = checkout_repo(repo, username, reponame, tag)
+          path, name = if isnothing(subpath)
+            complete(package, pkgn)
+          else
+            complete(joinpath(package, subpath))
           end
-        catch e
-          @debug "Failed to resolve github dep $p" exception=e
+          any(d -> d[1] == path, deps) || push!(deps, (path, name))
         end
+      catch e
+        @debug "Failed to resolve github dep $p" exception=e
       end
     end
   end
