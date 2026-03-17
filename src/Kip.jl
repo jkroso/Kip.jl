@@ -851,6 +851,7 @@ function load_from_cache(path::String, name::String)
   end
 end
 
+"Load a module, compiling or including as needed. No identity guarantees across calls."
 function load_module(path, name=pkgname(path))
   haskey(modules, path) && return modules[path]
   mod = try
@@ -870,6 +871,20 @@ function load_module(path, name=pkgname(path))
     Base.include(mod, path)
   end
   modules[path] = mod
+  mod
+end
+
+const _canonical_modules = Dict{String,Module}()
+
+"""
+Load a module with stable identity — repeated calls with paths that resolve to the
+same real file return the exact same Module object (`===`).
+"""
+function load_module!(path, name=pkgname(path))
+  key = realpath(path)
+  haskey(_canonical_modules, key) && return _canonical_modules[key]
+  mod = load_module(key, name)
+  _canonical_modules[key] = mod
   mod
 end
 

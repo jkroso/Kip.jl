@@ -64,3 +64,76 @@ const fixtures = joinpath(@__DIR__, "fixtures")
     @test !Kip.installed("NonExistentPkg_xyz_12345")
   end
 end
+
+@testset "__precompile__(false) in user modules" begin
+  @testset "module with __precompile__(false) loads without .ji cache" begin
+    path = realpath(joinpath(fixtures, "no_precompile.jl"))
+    delete!(Kip.modules, path)  # ensure fresh load
+    mod = Kip.load_module(path)
+    @test mod isa Module
+    @test isdefined(mod, :computed_at_load)
+    # Should not have produced a .ji file since precompilation is disabled
+    source = read(path, String)
+    hash = Kip.source_hash(source)
+    name = Kip.valid_identifier(replace(Kip.pkgname(path), r"[^\w]" => "_") * "_" * hash[1:12])
+    pkg_id = Base.PkgId(Kip.deterministic_uuid(hash), name)
+    cache_dir = Base.compilecache_dir(pkg_id)
+    has_ji = isdir(cache_dir) && any(f -> endswith(f, ".ji"), readdir(cache_dir))
+    @test !has_ji
+  end
+
+  @testset "module with __precompile__(false) reloads fresh each time" begin
+    path = realpath(joinpath(fixtures, "no_precompile.jl"))
+    delete!(Kip.modules, path)
+    mod1 = Kip.load_module(path)
+    val1 = mod1.computed_at_load
+    delete!(Kip.modules, path)
+    mod2 = Kip.load_module(path)
+    val2 = mod2.computed_at_load
+    # Each load should produce a new random value (not cached)
+    @test val1 != val2
+  end
+end
+
+@testset "__init__() in user modules" begin
+  @testset "__init__ is called when module is loaded" begin
+    path = realpath(joinpath(fixtures, "has_init.jl"))
+    delete!(Kip.modules, path)
+    mod = Kip.load_module(path)
+    @test mod isa Module
+    @test isdefined(mod, :initialized)
+    @test mod.initialized[] == true
+  end
+end
+
+@testset "load_module! identity cache" begin
+  @testset "returns the same object (===) on repeated calls" begin
+    path = joinpath(fixtures, "simple.jl")
+    delete!(Kip._canonical_modules, realpath(path))
+    a = Kip.load_module!(path)
+    b = Kip.load_module!(path)
+    @test a === b
+  end
+
+  @testset "normalizes different paths to the same module" begin
+    # Use a relative-ish path and the realpath — should get the same Module
+    path1 = joinpath(fixtures, "simple.jl")
+    path2 = joinpath(fixtures, ".", "simple.jl")
+    delete!(Kip._canonical_modules, realpath(path1))
+    a = Kip.load_module!(path1)
+    b = Kip.load_module!(path2)
+    @test a === b
+  end
+
+  @testset "survives modules dict being cleared" begin
+    path = joinpath(fixtures, "dep.jl")
+    rpath = realpath(path)
+    delete!(Kip._canonical_modules, rpath)
+    delete!(Kip.modules, rpath)
+    a = Kip.load_module!(path)
+    # Clear the underlying load_module cache — load_module! should still return the same object
+    delete!(Kip.modules, rpath)
+    b = Kip.load_module!(path)
+    @test a === b
+  end
+end
