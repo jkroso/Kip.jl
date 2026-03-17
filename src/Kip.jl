@@ -393,6 +393,62 @@ function resolve_use_dep!(deps, p, base)
   end
 end
 
+"""
+Walk the full @use dependency tree from an entry file.
+Returns (all_packages, file_deps, pkg3_repos) where:
+- all_packages: Set{String} of all Julia package names across the tree
+- file_deps: Vector{Tuple{String,String}} of (path, name) in post-order (deps before dependents)
+- pkg3_repos: Vector{String} of local paths to Pkg3 github repos for the unified environment
+"""
+function collect_all_deps(entry_path::String)
+  all_packages = Set{String}()
+  file_deps = Tuple{String,String}[]
+  pkg3_repos = String[]
+  visited = Set{String}()
+
+  function walk(path::String)
+    path in visited && return
+    push!(visited, path)
+    source = read(path, String)
+    base = dirname(path)
+
+    # Collect Julia package names from this file
+    for pkg in find_use_packages(source)
+      push!(all_packages, pkg)
+    end
+
+    # Collect and recurse into file-based deps
+    for (dep_path, dep_name) in find_use_deps(source, base)
+      walk(dep_path)
+    end
+
+    # Collect Pkg3 github repos referenced in this file
+    for line in split(source, "\n")
+      line = strip(line)
+      m = match(r"^@use\s+\"([^\"]+)\"", line)
+      isnothing(m) && continue
+      gm = match(gh_shorthand, m[1])
+      isnothing(gm) && continue
+      username, reponame, tag, subpath = gm.captures
+      try
+        repo = getrepo(username, reponame)
+        if is_pkg3_pkg(LibGit2.path(repo))
+          localpath = realpath(LibGit2.path(repo))
+          localpath ∉ pkg3_repos && push!(pkg3_repos, localpath)
+        end
+      catch
+      end
+    end
+
+    # Post-order: add this file after its deps
+    name = pkgname(path)
+    any(d -> d[1] == path, file_deps) || push!(file_deps, (path, name))
+  end
+
+  walk(entry_path)
+  (all_packages, file_deps, pkg3_repos)
+end
+
 const _precompiling = Set{String}()
 const _resolved_entries = Dict{String, Tuple{String, String}}()  # entry_path => (env_dir, content_hash)
 const _current_env_dir = Ref{Union{String,Nothing}}(nothing)  # set by ensure_environment!, read by load_from_cache
