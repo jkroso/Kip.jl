@@ -16,6 +16,7 @@ __init__() = begin
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
   global cache = joinpath(home, "cache")
+  global envs = joinpath(home, "envs")
   global stdlib = Set(readdir(Sys.STDLIB))
   global stdlib_uuids = Dict{String,String}()
   for d in readdir(Sys.STDLIB)
@@ -397,6 +398,9 @@ function resolve_use_dep!(deps, p, base)
 end
 
 const _precompiling = Set{String}()
+const _resolved_entries = Dict{String, Tuple{String, String}}()  # entry_path => (env_dir, content_hash)
+const _current_env_dir = Ref{Union{String,Nothing}}(nothing)  # set by ensure_environment!, read by load_from_cache
+const _entry_file = Ref{Union{String,Nothing}}(nothing)  # true entry point, set once on first @use
 
 """
 Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PATH
