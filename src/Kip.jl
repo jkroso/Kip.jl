@@ -449,6 +449,72 @@ function collect_all_deps(entry_path::String)
   (all_packages, file_deps, pkg3_repos)
 end
 
+"""
+Create a unified environment with all Julia package deps resolved together.
+Returns the env directory path.
+"""
+function resolve_environment(all_packages::Set{String}, pkg3_repos::Vector{String}=String[])
+  # Filter out packages that are part of Kip's own deps or don't need resolution
+  pkgs_to_resolve = filter(all_packages) do pkg
+    pkg ∉ ("Kip", "Base", "Core", "Main", "InteractiveUtils") && pkg ∉ stdlib
+  end
+
+  # Compute hash from sorted package names for stable env identity
+  pkg_list = sort(collect(pkgs_to_resolve))
+  hash_input = join(pkg_list, "\n") * "\n" * join(sort(pkg3_repos), "\n")
+  env_hash = source_hash(hash_input)
+  env_dir = joinpath(envs, env_hash[1:16])
+
+  # Return existing env if already resolved
+  if isfile(joinpath(env_dir, "Manifest.toml"))
+    return env_dir
+  end
+
+  mkpath(env_dir)
+
+  # Build Project.toml with all deps
+  deps_lines = String[]
+  for pkg in pkg_list
+    uuid = find_pkg_uuid(pkg)
+    !isnothing(uuid) && push!(deps_lines, "$pkg = \"$uuid\"")
+  end
+
+  deps_toml = isempty(deps_lines) ? "" : "\n[deps]\n" * join(deps_lines, "\n") * "\n"
+
+  write(joinpath(env_dir, "Project.toml"), """
+  name = "KipEnv"
+  uuid = "$(deterministic_uuid(env_hash))"
+  $deps_toml""")
+
+  # Resolve and instantiate
+  old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
+  ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
+  try
+    Pkg.activate(env_dir) do
+      # Add Pkg3 github repos via develop
+      for repo_path in pkg3_repos
+        try
+          Pkg.develop(path=repo_path)
+        catch e
+          @debug "Failed to Pkg.develop $repo_path" exception=e
+        end
+      end
+      redirect_stderr(devnull) do
+        Pkg.resolve(io=devnull)
+        Pkg.instantiate(io=devnull)
+      end
+    end
+  finally
+    if isnothing(old_auto)
+      delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
+    else
+      ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
+    end
+  end
+
+  env_dir
+end
+
 const _precompiling = Set{String}()
 const _resolved_entries = Dict{String, Tuple{String, String}}()  # entry_path => (env_dir, content_hash)
 const _current_env_dir = Ref{Union{String,Nothing}}(nothing)  # set by ensure_environment!, read by load_from_cache
