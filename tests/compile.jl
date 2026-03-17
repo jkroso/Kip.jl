@@ -106,34 +106,63 @@ end
   end
 end
 
-@testset "load_module! identity cache" begin
+@testset "load_module identity cache" begin
   @testset "returns the same object (===) on repeated calls" begin
     path = joinpath(fixtures, "simple.jl")
-    delete!(Kip._canonical_modules, realpath(path))
-    a = Kip.load_module!(path)
-    b = Kip.load_module!(path)
+    delete!(Kip.modules, realpath(path))
+    a = Kip.load_module(path)
+    b = Kip.load_module(path)
     @test a === b
   end
 
   @testset "normalizes different paths to the same module" begin
-    # Use a relative-ish path and the realpath — should get the same Module
     path1 = joinpath(fixtures, "simple.jl")
     path2 = joinpath(fixtures, ".", "simple.jl")
-    delete!(Kip._canonical_modules, realpath(path1))
-    a = Kip.load_module!(path1)
-    b = Kip.load_module!(path2)
+    delete!(Kip.modules, realpath(path1))
+    a = Kip.load_module(path1)
+    b = Kip.load_module(path2)
     @test a === b
   end
+end
 
-  @testset "survives modules dict being cleared" begin
-    path = joinpath(fixtures, "dep.jl")
-    rpath = realpath(path)
-    delete!(Kip._canonical_modules, rpath)
-    delete!(Kip.modules, rpath)
-    a = Kip.load_module!(path)
-    # Clear the underlying load_module cache — load_module! should still return the same object
-    delete!(Kip.modules, rpath)
-    b = Kip.load_module!(path)
-    @test a === b
+@testset "recompilation on source change" begin
+  @testset "edited module produces new .ji and new values" begin
+    # Write v1 of a temp module
+    path = joinpath(fixtures, "mutable_mod.jl")
+    write(path, "value() = 1\n")
+    try
+      rpath = realpath(path)
+      delete!(Kip.modules, rpath)
+      mod1 = Kip.load_module(rpath)
+      @test Base.invokelatest(mod1.value) == 1
+
+      # Grab the .ji path for v1
+      src1 = read(rpath, String)
+      hash1 = Kip.source_hash(src1)
+      name1 = Kip.valid_identifier(replace(Kip.pkgname(rpath), r"[^\w]" => "_") * "_" * hash1[1:12])
+      pkg_id1 = Base.PkgId(Kip.deterministic_uuid(hash1), name1)
+      cache_dir1 = Base.compilecache_dir(pkg_id1)
+      @test isdir(cache_dir1)
+      @test any(f -> endswith(f, ".ji"), readdir(cache_dir1))
+
+      # Edit the file — new content means new hash, so a fresh compile
+      write(path, "value() = 2\n")
+      delete!(Kip.modules, rpath)
+      mod2 = Kip.load_module(rpath)
+      @test Base.invokelatest(mod2.value) == 2
+      @test mod2 !== mod1
+
+      # The new version should have its own .ji under a different hash
+      src2 = read(rpath, String)
+      hash2 = Kip.source_hash(src2)
+      @test hash1 != hash2
+      name2 = Kip.valid_identifier(replace(Kip.pkgname(rpath), r"[^\w]" => "_") * "_" * hash2[1:12])
+      pkg_id2 = Base.PkgId(Kip.deterministic_uuid(hash2), name2)
+      cache_dir2 = Base.compilecache_dir(pkg_id2)
+      @test isdir(cache_dir2)
+      @test any(f -> endswith(f, ".ji"), readdir(cache_dir2))
+    finally
+      rm(path, force=true)
+    end
   end
 end

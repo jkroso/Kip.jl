@@ -203,9 +203,9 @@ const modules = Dict{String,Module}()
 "Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString)
   if occursin(absolute_path, path)
-    load_module!(complete(path)...)
+    load_module(complete(path)...)
   elseif occursin(relative_path, path)
-    load_module!(complete(normpath(base, path))...)
+    load_module(complete(normpath(base, path))...)
   else
     m = match(gh_shorthand, path)
     @assert m != nothing  "unable to resolve '$path'"
@@ -232,7 +232,7 @@ function require(path::AbstractString, base::AbstractString)
       else
         complete(joinpath(package, subpath))
       end
-      load_module!(file, pkgname)
+      load_module(file, pkgname)
     end
   end
 end
@@ -645,9 +645,9 @@ function precompile_deps!(path::String)
     end
     # In the main process, fully compile deps so their .ji files exist
     # before the parent's compilecache subprocess needs them
-    if !Base.generating_output() && !haskey(modules, dep_path)
+    if !Base.generating_output() && !haskey(modules, realpath(dep_path))
       try
-        load_module!(dep_path, dep_name)
+        load_module(dep_path, dep_name)
       catch
         # Compilation failed; parent will also fail or fall back
       end
@@ -851,8 +851,12 @@ function load_from_cache(path::String, name::String)
   end
 end
 
-"Load a module, compiling or including as needed. No identity guarantees across calls."
+"""
+Load a module with stable identity — paths are normalized via `realpath` so
+repeated calls to the same file always return the exact same Module (`===`).
+"""
 function load_module(path, name=pkgname(path))
+  path = realpath(path)
   haskey(modules, path) && return modules[path]
   mod = try
     load_from_cache(path, name)
@@ -871,20 +875,6 @@ function load_module(path, name=pkgname(path))
     Base.include(mod, path)
   end
   modules[path] = mod
-  mod
-end
-
-const _canonical_modules = Dict{String,Module}()
-
-"""
-Load a module with stable identity — repeated calls with paths that resolve to the
-same real file return the exact same Module object (`===`).
-"""
-function load_module!(path, name=pkgname(path))
-  key = realpath(path)
-  haskey(_canonical_modules, key) && return _canonical_modules[key]
-  mod = load_module(key, name)
-  _canonical_modules[key] = mod
   mod
 end
 
