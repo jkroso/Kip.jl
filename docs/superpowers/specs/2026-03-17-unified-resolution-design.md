@@ -20,7 +20,7 @@ A new function `collect_all_deps(entry_path)` recursively walks the `@use` depen
 4. Recurses into file-based deps
 5. Tracks visited files to avoid cycles
 
-For GitHub deps that are not yet cloned, the tree walk triggers `getrepo()` to clone them (same as current behavior in `require()`). This is acceptable since it only happens once per dep.
+For GitHub deps that are not yet cloned, the tree walk triggers `getrepo()` to clone them (same as current behavior in `require()`). This requires modifying `resolve_use_dep!` — the current implementation skips uncloned repos (`if isdir(localpath)`), but the tree walk needs complete information so it must clone on demand. This is acceptable since it only happens once per dep.
 
 Returns:
 - A `Set{String}` of all Julia package names needed across the entire tree
@@ -48,7 +48,7 @@ Cache invalidation: if the set of packages changes (a file adds a new `@use PkgN
 - The `[deps]` section lists packages that specific module uses (needed for `compilecache`), with UUIDs from the already-resolved unified manifest
 - No per-module `Manifest.toml` — instead, a symlink to the unified `Manifest.toml` is placed in each cache package dir so `compilecache` subprocesses can find package locations
 
-The `compilecache` subprocess mechanism: Julia's `Base.compilecache` spawns a subprocess with `--project=<pkg_dir>`. By symlinking the unified `Manifest.toml` into each cache package dir, the subprocess sees the full resolved dependency set. Additionally, `JULIA_LOAD_PATH` is set to include the unified env dir before calling `Base.compilecache`, ensuring the subprocess can locate all packages.
+The `compilecache` subprocess mechanism: Julia's `Base.compilecache` spawns a subprocess with `--project=<pkg_dir>`. By symlinking the unified `Manifest.toml` into each cache package dir, the subprocess sees the full resolved dependency set. Additionally, `ENV["JULIA_LOAD_PATH"]` (the environment variable, not the in-process `LOAD_PATH` vector) is set to include the unified env dir before calling `Base.compilecache`. This is critical because `LOAD_PATH` mutations do not cross process boundaries — only `ENV["JULIA_LOAD_PATH"]` is inherited by subprocesses.
 
 ### 4. Entry Point Orchestration
 
@@ -69,6 +69,7 @@ Global state:
 ```julia
 const _resolved_entries = Dict{String, String}()  # entry_path => env_dir
 ```
+The key is the entry file path. On each orchestration trigger, the entry file's content is hashed and compared against the last-seen hash to detect changes. If the content has changed (e.g. a new `@use` was added), orchestration re-runs even if the entry path is already in `_resolved_entries`.
 
 **The `@use PkgName` macro rewrite:** The entire symbol-based branch (currently lines 702-722) changes. Instead of calling `Pkg.add`/`Pkg.instantiate` at macro expansion time, it expands to a `Base.require` call. The package is already installed and available because orchestration ran first. The `installed()` check and `Pkg.add` fallback are removed. The macro expands to:
 ```julia
@@ -78,13 +79,15 @@ end
 ```
 Where the `import` statement works because the unified env is on `LOAD_PATH`.
 
-**Dependencies added after orchestration:** If a user adds a new `@use SomePackage` to a file and re-runs, orchestration re-triggers because the file content has changed (the entry file's hash differs, or for REPL usage the package is not in the current unified env). If running in a long-lived REPL session, the user must restart Julia — this is the same constraint as standard Julia environments.
+**Dependencies added after orchestration:** If a user adds a new `@use SomePackage` to a file and re-runs the script, orchestration re-triggers because the entry file's content hash has changed. If running in a long-lived REPL session, the user must restart Julia — this is the same constraint as standard Julia environments.
+
+**The `@use PkgName` macro also removes the `Base.ACTIVE_PROJECT[]` save/restore pattern** (currently lines 713-714, 720-721). Since the unified env is on `LOAD_PATH`, there is no need to temporarily switch the active project.
 
 ### 5. What Gets Removed / Simplified
 
 - `Pkg.resolve()` inside `create_cache_package` — deleted
 - The entire `@use PkgName` macro branch that does `Pkg.add` / `Pkg.instantiate` — replaced with plain `import`/`using` against unified env
-- `Pkg.activate(base)` in `require()` for pkg3 github repos — uses unified env instead
+- `Pkg.activate(base)` in `require()` for pkg3 github repos — the entire Pkg3 branch in `require()` is rewritten to use `Base.require` against the unified env instead of per-directory `Pkg.activate`/`add_pkg`/`update_pkg`
 - Per-module `Manifest.toml` generation — replaced with symlink to unified manifest
 - `installed()` function — no longer needed
 - `is_installed()` / `add_pkg()` / `update_pkg()` — no longer needed
