@@ -203,9 +203,9 @@ const modules = Dict{String,Module}()
 "Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString)
   if occursin(absolute_path, path)
-    load_module(complete(path)...)
+    load_module!(complete(path)...)
   elseif occursin(relative_path, path)
-    load_module(complete(normpath(base, path))...)
+    load_module!(complete(normpath(base, path))...)
   else
     m = match(gh_shorthand, path)
     @assert m != nothing  "unable to resolve '$path'"
@@ -232,7 +232,7 @@ function require(path::AbstractString, base::AbstractString)
       else
         complete(joinpath(package, subpath))
       end
-      load_module(file, pkgname)
+      load_module!(file, pkgname)
     end
   end
 end
@@ -647,7 +647,7 @@ function precompile_deps!(path::String)
     # before the parent's compilecache subprocess needs them
     if !Base.generating_output() && !haskey(modules, dep_path)
       try
-        load_module(dep_path, dep_name)
+        load_module!(dep_path, dep_name)
       catch
         # Compilation failed; parent will also fail or fall back
       end
