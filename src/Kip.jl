@@ -931,8 +931,12 @@ macro use(first, rest...)
     str = replace(repr(first), r"#= [^=]* =#" => "", "()" => "")
     str = replace(str, r"^:\({0,2}([^\)]+)\){0,2}$" => s"import \1")
     str = replace(str, r"^import (.*)\.{3}$" => s"using \1")
+    import_expr = Meta.parse(str)
     return quote
-      if !Base.generating_output() && !installed($(string(pkg)))
+      if Kip.initial_pwd ∉ LOAD_PATH
+        pushfirst!(LOAD_PATH, Kip.initial_pwd)
+      end
+      if !Base.generating_output() && isnothing(Base.identify_package($(string(pkg))))
         old = Base.ACTIVE_PROJECT[]
         Base.ACTIVE_PROJECT[] = Kip.initial_pwd
         try
@@ -941,10 +945,7 @@ macro use(first, rest...)
           Base.ACTIVE_PROJECT[] = old
         end
       end
-      if Kip.initial_pwd ∉ LOAD_PATH
-        pushfirst!(LOAD_PATH, Kip.initial_pwd)
-      end
-      $(esc(Meta.parse(str)))
+      Core.eval($(__module__), $(QuoteNode(import_expr)))
     end
   end
   splatall = false

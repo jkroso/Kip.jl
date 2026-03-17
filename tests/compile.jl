@@ -43,4 +43,24 @@ const fixtures = joinpath(@__DIR__, "fixtures")
     mod = Kip.load_module(realpath(path))
     @test isdefined(mod, :greet)
   end
+
+  @testset "@use PkgName installs and loads stdlib packages" begin
+    # Dates is a stdlib, so no download needed
+    mod = Kip.load_module(realpath(joinpath(fixtures, "uses_pkg.jl")))
+    @test isdefined(mod, :today_str)
+    @test mod.today_str() isa String
+  end
+
+  @testset "@use PkgName installs and loads 3rd party packages" begin
+    mod = Kip.load_module(realpath(joinpath(fixtures, "uses_3rd_party.jl")))
+    @test isdefined(mod, :to_json)
+    @test mod.to_json(Dict("a" => 1)) isa String
+  end
+
+  @testset "installed() checks initial_pwd Project.toml" begin
+    # stdlib packages are always installed
+    @test Kip.installed("Dates")
+    # nonexistent packages are not
+    @test !Kip.installed("NonExistentPkg_xyz_12345")
+  end
 end
