@@ -797,7 +797,7 @@ function load_from_cache(path::String, name::String)
       try
         mod = Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
         if Base.generating_output()
-          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name, source)
+          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name, source; env_dir)
         end
         return mod
       catch
@@ -809,7 +809,14 @@ function load_from_cache(path::String, name::String)
   end
 
   # No valid cache found, compile
-  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source)
+  env_dir = _current_env_dir[]
+  if isnothing(env_dir)
+    proj = Base.active_project()
+    if !isnothing(proj) && isfile(joinpath(dirname(proj), "Manifest.toml"))
+      env_dir = dirname(proj)
+    end
+  end
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
   # Suppress Pkg auto-precompilation noise and git credential prompts in the compilecache subprocess
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
