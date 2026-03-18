@@ -875,6 +875,9 @@ function load_module(path, name=pkgname(path))
     Base.generating_output() && error("Cannot precompile $path: cache compilation failed or was skipped")
     mod = get_module(path, name)
     Base.include(mod, path)
+    Base.invokelatest() do
+      isdefined(mod, :__init__) && mod.__init__()
+    end
   end
   modules[path] = mod
   mod

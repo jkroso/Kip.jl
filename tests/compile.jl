@@ -106,6 +106,17 @@ end
   end
 end
 
+@testset "__init__() called when precompilation fails" begin
+  @testset "__init__ runs on fallback include path" begin
+    path = realpath(joinpath(fixtures, "bad_module_with_init.jl"))
+    delete!(Kip.modules, path)
+    mod = Kip.load_module(path)
+    @test mod isa Module
+    @test isdefined(mod, :initialized)
+    @test mod.initialized[] == true
+  end
+end
+
 @testset "load_module identity cache" begin
   @testset "returns the same object (===) on repeated calls" begin
     path = joinpath(fixtures, "simple.jl")
