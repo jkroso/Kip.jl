@@ -202,6 +202,7 @@ const modules = Dict{String,Module}()
 
 "Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString)
+  startswith(path, "~/") && (path = homedir() * path[2:end])
   if occursin(absolute_path, path)
     load_module(complete(path)...)
   elseif occursin(relative_path, path)
@@ -365,6 +366,7 @@ function find_use_deps(source::String, base::String)
 end
 
 function resolve_use_dep!(deps, p, base)
+  startswith(p, "~/") && (p = homedir() * p[2:end])
   if occursin(absolute_path, p)
     path, name = complete(p)
     any(d -> d[1] == path, deps) || push!(deps, (path, name))
