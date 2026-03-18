@@ -716,7 +716,8 @@ function create_cache_package(path::String, hash::String, name::String, source::
   if !isnothing(env_dir)
     manifest_src = joinpath(env_dir, "Manifest.toml")
     manifest_dest = joinpath(pkg_dir, "Manifest.toml")
-    if isfile(manifest_src) && !isfile(manifest_dest)
+    if isfile(manifest_src) && !islink(manifest_dest)
+      rm(manifest_dest; force=true)
       symlink(manifest_src, manifest_dest)
     end
   elseif !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
