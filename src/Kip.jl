@@ -947,15 +947,16 @@ macro use(first, rest...)
         pushfirst!(LOAD_PATH, Kip.initial_pwd)
       end
       if !Base.generating_output() && isnothing(Base.identify_package($(string(pkg))))
-        old = Base.ACTIVE_PROJECT[]
-        Base.ACTIVE_PROJECT[] = Kip.initial_pwd
-        try
-          Pkg.add($(string(pkg)))
-        finally
-          Base.ACTIVE_PROJECT[] = old
+        let old = Base.ACTIVE_PROJECT[]
+          try
+            Base.ACTIVE_PROJECT[] = Kip.initial_pwd
+            Pkg.add($(string(pkg)))
+          finally
+            Base.ACTIVE_PROJECT[] = old
+          end
         end
       end
-      Core.eval($(__module__), $(QuoteNode(import_expr)))
+      $(import_expr)
     end
   end
   splatall = false
