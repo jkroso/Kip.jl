@@ -122,7 +122,13 @@ pkgname(path::AbstractString) = begin
       dir
     end
   elseif isdirpath(path)
-    basename(dirname(path))
+    dir = basename(dirname(path))
+    if occursin(r"^[0-9a-f]{40}$", dir)
+      # Skip git commit hash directories (e.g. ~/.kip/refs/user/Repo.jl/HASH/)
+      basename(dirname(dirname(path)))
+    else
+      dir
+    end
   else
     basename(path)
   end
@@ -628,34 +634,97 @@ function precompile_deps!(path::String)
   dirs = String[]
   source = read(path, String)
   base = dirname(path)
-  for (dep_path, dep_name) in find_use_deps(source, base)
+  for (dep_path, _dep_name) in find_use_deps(source, base)
     # Recursively pre-compile this dep's deps first
     append!(dirs, precompile_deps!(dep_path))
-    # Now compile this dep (load_from_cache handles caching/noprecompile)
+    # Use pkgname(dep_path) for a consistent cache name regardless of how
+    # the file was referenced (git hash, relative path, etc.)
     dep_source = read(dep_path, String)
     hash = source_hash(dep_source)
-    cache_name = valid_identifier(replace(dep_name, r"[^\w]" => "_") * "_" * hash[1:12])
+    canonical_name = pkgname(dep_path)
+    cache_name = valid_identifier(replace(canonical_name, r"[^\w]" => "_") * "_" * hash[1:12])
     pkg_dir = joinpath(cache, hash)
     pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
     # Ensure the cache package dir exists and is on LOAD_PATH
+    env_dir = _current_env_dir[]
+    if isnothing(env_dir)
+      proj = Base.active_project()
+      if !isnothing(proj) && isfile(joinpath(dirname(proj), "Manifest.toml"))
+        env_dir = dirname(proj)
+      end
+    end
     if !isdir(joinpath(pkg_dir, "src"))
-      create_cache_package(dep_path, hash, cache_name, dep_source)
+      create_cache_package(dep_path, hash, cache_name, dep_source; env_dir)
     end
     if pkg_dir ∉ LOAD_PATH
       pushfirst!(LOAD_PATH, pkg_dir)
       push!(dirs, pkg_dir)
     end
-    # In the main process, fully compile deps so their .ji files exist
-    # before the parent's compilecache subprocess needs them
-    if !Base.generating_output() && !haskey(modules, realpath(dep_path))
+    # Ensure .ji exists so the parent's compilecache subprocess can find it,
+    # but don't load the module — _require_from_serialized will load deps
+    # as part of the parent's dependency chain, avoiding duplicate loads
+    if !Base.generating_output() && !isdir(Base.compilecache_dir(pkg_id))
       try
-        load_module(dep_path, dep_name)
+        ensure_compiled!(dep_path)
       catch
         # Compilation failed; parent will also fail or fall back
       end
     end
   end
   dirs
+end
+
+"""Compile a file's cache .ji without loading the module into the process.
+Used by precompile_deps! to ensure .ji files exist for the parent's
+compilecache subprocess without causing duplicate module loads at runtime."""
+function ensure_compiled!(path::String, name::String=pkgname(path))
+  source = read(path, String)
+  hash = source_hash(source)
+  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
+  pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
+
+  # Already compiled
+  cache_dir = Base.compilecache_dir(pkg_id)
+  if isdir(cache_dir) && any(endswith(".ji"), readdir(cache_dir))
+    return
+  end
+
+  # Recursively ensure deps are compiled first
+  precompile_deps!(path)
+
+  # Create cache package if needed
+  pkg_dir = joinpath(cache, hash)
+  env_dir = _current_env_dir[]
+  if isnothing(env_dir)
+    proj = Base.active_project()
+    if !isnothing(proj) && isfile(joinpath(dirname(proj), "Manifest.toml"))
+      env_dir = dirname(proj)
+    end
+  end
+  if !isdir(joinpath(pkg_dir, "src"))
+    create_cache_package(path, hash, cache_name, source; env_dir)
+  end
+
+  # Compile only — don't load
+  src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
+  old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
+  old_git_prompt = get(ENV, "GIT_TERMINAL_PROMPT", nothing)
+  ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
+  ENV["GIT_TERMINAL_PROMPT"] = "0"
+  try
+    Base.compilecache(pkg_id, src_path)
+  finally
+    if isnothing(old_auto)
+      delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
+    else
+      ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
+    end
+    if isnothing(old_git_prompt)
+      delete!(ENV, "GIT_TERMINAL_PROMPT")
+    else
+      ENV["GIT_TERMINAL_PROMPT"] = old_git_prompt
+    end
+  end
 end
 
 "Look up a package's UUID from loaded modules, stdlib, the environment manifest, or the registry"
