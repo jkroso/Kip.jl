@@ -57,9 +57,9 @@ const fixtures = joinpath(@__DIR__, "fixtures")
     @test mod.to_json(Dict("a" => 1)) isa String
   end
 
-  @testset "transitive 3rd party package deps resolve in cache manifest" begin
-    # Reproduces: "Cannot locate source for PrettyPrinting" when a Kip dep
-    # uses a Julia package that isn't in the active project's Manifest.toml
+  @testset "transitive 3rd party package deps emit Base.require in wrapper" begin
+    # Verify that a module using a 3rd party package gets a Base.require line
+    # in its wrapper so the compilecache subprocess can find the package
     path = realpath(joinpath(fixtures, "dep_uses_pkg.jl"))
     source = read(path, String)
     hash = Kip.source_hash(source)
@@ -67,14 +67,14 @@ const fixtures = joinpath(@__DIR__, "fixtures")
     pkg_dir = joinpath(Kip.cache, hash)
     # Clean any existing cache so create_cache_package runs fresh
     rm(pkg_dir, recursive=true, force=true)
-    # Use the Kip project dir as env_dir — its Manifest does NOT have JSON3
-    env_dir = joinpath(@__DIR__, "..")
-    Kip.create_cache_package(path, hash, name, source; env_dir)
-    manifest_path = joinpath(pkg_dir, "Manifest.toml")
-    @test isfile(manifest_path)
-    manifest = Kip.TOML.parsefile(manifest_path)
-    manifest_deps = get(manifest, "deps", Dict())
-    @test haskey(manifest_deps, "JSON3")
+    Kip.create_cache_package(path, hash, name, source)
+    wrapper_path = joinpath(pkg_dir, "src", "$name.jl")
+    @test isfile(wrapper_path)
+    wrapper = read(wrapper_path, String)
+    @test occursin("Base.require(Base.PkgId(Base.UUID(", wrapper)
+    @test occursin("JSON3", wrapper)
+    # No Manifest.toml should be generated
+    @test !isfile(joinpath(pkg_dir, "Manifest.toml"))
   end
 
   @testset "dep with transitive 3rd party package loads correctly" begin
