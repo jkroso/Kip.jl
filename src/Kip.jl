@@ -556,6 +556,46 @@ function collect_file_dep_info(source::String, base::String)
   file_dep_info
 end
 
+const _pkg_deps_loaded = Set{String}()
+
+"""
+Ensure all Julia package deps in a file's transitive @use tree are loaded in
+the current process. This puts them in Base.loaded_modules so compilecache
+passes them as concrete_deps to subprocesses — no Manifest.toml needed.
+"""
+function ensure_pkg_deps_loaded!(path::String)
+  path in _pkg_deps_loaded && return
+  push!(_pkg_deps_loaded, path)
+  source = read(path, String)
+  base = dirname(path)
+  # Recurse into file deps first
+  for (dep_path, _) in find_use_deps(source, base)
+    try ensure_pkg_deps_loaded!(dep_path) catch; end
+  end
+  # Load Julia package deps
+  for pkg in find_use_packages(source)
+    pkg ∈ ("Kip", "Base", "Core", "Main", "InteractiveUtils") && continue
+    pkg in stdlib && continue
+    uuid_str = find_pkg_uuid(pkg)
+    isnothing(uuid_str) && continue
+    pkg_id = Base.PkgId(Base.UUID(uuid_str), pkg)
+    haskey(Base.loaded_modules, pkg_id) && continue
+    # Install if needed, then load
+    if isnothing(Base.locate_package(pkg_id))
+      try
+        old = Base.ACTIVE_PROJECT[]
+        try
+          Base.ACTIVE_PROJECT[] = initial_pwd
+          Pkg.add(pkg)
+        finally
+          Base.ACTIVE_PROJECT[] = old
+        end
+      catch; end
+    end
+    try Base.require(pkg_id) catch; end
+  end
+end
+
 const _registry_cache = Ref{Union{Nothing, Dict{String,String}}}(nothing)
 
 "Look up a package UUID from uncompressed registries or Pkg.Registry"
@@ -736,14 +776,11 @@ function create_cache_package(path::String, hash::String, name::String, source::
   # Build Base.require lines for all deps
   require_lines = String[]
 
-  # Julia package deps (only if already installed — @use macro will install missing ones)
+  # Julia package deps
   for pkg in use_pkgs
     pkg ∈ ("Kip", "Base", "Core", "Main") && continue
     pkg_uuid = find_pkg_uuid(pkg)
-    isnothing(pkg_uuid) && continue
-    pkg_id = Base.PkgId(Base.UUID(pkg_uuid), pkg)
-    isnothing(Base.locate_package(pkg_id)) && continue
-    push!(require_lines,
+    !isnothing(pkg_uuid) && push!(require_lines,
       "Base.require(Base.PkgId(Base.UUID(\"$pkg_uuid\"), \"$pkg\"))")
   end
 
@@ -797,11 +834,9 @@ function load_from_cache(path::String, name::String)
     return Base.loaded_modules[pkg_id]
   end
 
-  # Ensure the user's project is on LOAD_PATH so compilecache subprocesses
-  # can find packages installed there by @use macros in other modules
-  if initial_pwd ∉ LOAD_PATH
-    pushfirst!(LOAD_PATH, initial_pwd)
-  end
+  # Ensure Julia package deps are loaded in the parent process so they appear
+  # in concrete_deps for compilecache subprocesses (avoids needing Manifest.toml)
+  ensure_pkg_deps_loaded!(path)
 
   # Ensure deps' cache dirs are on LOAD_PATH before loading from cache
   # (needed for _require_from_serialized to locate dependency modules)
