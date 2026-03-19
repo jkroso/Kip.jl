@@ -836,8 +836,13 @@ function load_from_cache(path::String, name::String)
     return Base.loaded_modules[pkg_id]
   end
 
-  # Ensure Julia package deps are loaded in the parent process so they appear
-  # in concrete_deps for compilecache subprocesses (avoids needing Manifest.toml)
+  # Ensure initial_pwd is on LOAD_PATH — this is where @use PkgName installs
+  # packages, and the compilecache subprocess needs to locate them there
+  if initial_pwd ∉ LOAD_PATH
+    pushfirst!(LOAD_PATH, initial_pwd)
+  end
+
+  # Ensure Julia package deps are loaded in the parent process before compilation
   ensure_pkg_deps_loaded!(path)
 
   # Ensure deps' cache dirs are on LOAD_PATH before loading from cache
