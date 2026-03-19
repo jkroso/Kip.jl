@@ -209,9 +209,9 @@ const modules = Dict{String,Module}()
 function require(path::AbstractString, base::AbstractString)
   startswith(path, "~/") && (path = homedir() * path[2:end])
   if occursin(absolute_path, path)
-    load_module(complete(path)...)
+    load_module(first(complete(path)))
   elseif occursin(relative_path, path)
-    load_module(complete(normpath(base, path))...)
+    load_module(first(complete(normpath(base, path))))
   else
     m = match(gh_shorthand, path)
     @assert m != nothing  "unable to resolve '$path'"
@@ -238,7 +238,7 @@ function require(path::AbstractString, base::AbstractString)
       else
         complete(joinpath(package, subpath))
       end
-      load_module(file, pkgname)
+      load_module(file)
     end
   end
 end
@@ -936,9 +936,9 @@ end
 Load a module with stable identity — paths are normalized via `realpath` so
 repeated calls to the same file always return the exact same Module (`===`).
 """
-function load_module(path, name=pkgname(path))
+function load_module(path)
   path = realpath(path)
-  name = pkgname(path) # re-derive from realpath to get canonical case
+  name = pkgname(path)
   haskey(modules, path) && return modules[path]
   mod = try
     load_from_cache(path, name)
