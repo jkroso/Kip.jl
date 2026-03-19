@@ -572,27 +572,29 @@ function ensure_pkg_deps_loaded!(path::String)
   for (dep_path, _) in find_use_deps(source, base)
     try ensure_pkg_deps_loaded!(dep_path) catch; end
   end
-  # Load Julia package deps
-  for pkg in find_use_packages(source)
-    pkg ∈ ("Kip", "Base", "Core", "Main", "InteractiveUtils") && continue
-    pkg in stdlib && continue
-    uuid_str = find_pkg_uuid(pkg)
-    isnothing(uuid_str) && continue
-    pkg_id = Base.PkgId(Base.UUID(uuid_str), pkg)
-    haskey(Base.loaded_modules, pkg_id) && continue
-    # Install if needed, then load
-    if isnothing(Base.locate_package(pkg_id))
-      try
-        old = Base.ACTIVE_PROJECT[]
-        try
-          Base.ACTIVE_PROJECT[] = initial_pwd
-          Pkg.add(pkg)
-        finally
-          Base.ACTIVE_PROJECT[] = old
-        end
-      catch; end
+  # Load Julia package deps using initial_pwd as the project context
+  # (that's where @use PkgName installs packages)
+  pkgs = filter(find_use_packages(source)) do pkg
+    pkg ∉ ("Kip", "Base", "Core", "Main", "InteractiveUtils") && pkg ∉ stdlib
+  end
+  isempty(pkgs) && return
+  old = Base.ACTIVE_PROJECT[]
+  Base.ACTIVE_PROJECT[] = initial_pwd
+  try
+    for pkg in pkgs
+      uuid_str = find_pkg_uuid(pkg)
+      isnothing(uuid_str) && continue
+      pkg_id = Base.PkgId(Base.UUID(uuid_str), pkg)
+      haskey(Base.loaded_modules, pkg_id) && continue
+      # Install if needed
+      if isnothing(Base.locate_package(pkg_id))
+        try Pkg.add(pkg) catch; end
+      end
+      # Load into parent so compilecache passes it as concrete_deps
+      try Base.require(pkg_id) catch; end
     end
-    try Base.require(pkg_id) catch; end
+  finally
+    Base.ACTIVE_PROJECT[] = old
   end
 end
 
