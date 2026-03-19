@@ -586,7 +586,7 @@ end
 
 const _registry_cache = Ref{Union{Nothing, Dict{String,String}}}(nothing)
 
-"Look up a package UUID by reading registry TOML files directly"
+"Look up a package UUID from uncompressed registries or Pkg.Registry"
 function registry_uuid(name::String)
   cache = _registry_cache[]
   if isnothing(cache)
@@ -605,7 +605,21 @@ function registry_uuid(name::String)
     end
     _registry_cache[] = cache
   end
-  get(cache, name, nothing)
+  uuid = get(cache, name, nothing)
+  !isnothing(uuid) && return uuid
+  # Fall back to Pkg.Registry for compressed registries (read-only, no side effects)
+  try
+    Reg = Pkg.Registry
+    for reg in Base.invokelatest(Reg.reachable_registries)
+      for uuid in Base.invokelatest(Reg.uuids_from_name, reg, name)
+        result = string(uuid)
+        cache[name] = result
+        return result
+      end
+    end
+  catch
+  end
+  nothing
 end
 
 """
