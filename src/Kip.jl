@@ -623,6 +623,57 @@ const _resolved_entries = Dict{String, Tuple{String, String}}()  # entry_path =>
 const _current_env_dir = Ref{Union{String,Nothing}}(nothing)  # set by ensure_environment!, read by load_from_cache
 const _entry_file = Ref{Union{String,Nothing}}(nothing)  # true entry point, set once on first @use
 
+"Propagate current LOAD_PATH to compilecache subprocesses via JULIA_LOAD_PATH"
+function with_load_path(f)
+  old = get(ENV, "JULIA_LOAD_PATH", nothing)
+  paths = String[]
+  for p in LOAD_PATH
+    if p isa String
+      push!(paths, p)
+    elseif p == "@"
+      push!(paths, "@")
+    elseif p == "@stdlib"
+      push!(paths, "@stdlib")
+    elseif p == "@v#.#"
+      push!(paths, "@v#.#")
+    end
+  end
+  ENV["JULIA_LOAD_PATH"] = join(paths, Sys.iswindows() ? ';' : ':')
+  try
+    f()
+  finally
+    if isnothing(old)
+      delete!(ENV, "JULIA_LOAD_PATH")
+    else
+      ENV["JULIA_LOAD_PATH"] = old
+    end
+  end
+end
+
+const _registry_cache = Ref{Union{Nothing, Dict{String,String}}}(nothing)
+
+"Look up a package UUID by reading registry TOML files directly"
+function registry_uuid(name::String)
+  cache = _registry_cache[]
+  if isnothing(cache)
+    cache = Dict{String,String}()
+    for depot in DEPOT_PATH
+      reg_dir = joinpath(depot, "registries")
+      isdir(reg_dir) || continue
+      for entry in readdir(reg_dir, join=true)
+        reg_file = joinpath(entry, "Registry.toml")
+        isfile(reg_file) || continue
+        reg = TOML.parsefile(reg_file)
+        for (uuid, info) in get(reg, "packages", Dict())
+          cache[info["name"]] = uuid
+        end
+      end
+    end
+    _registry_cache[] = cache
+  end
+  get(cache, name, nothing)
+end
+
 """
 Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PATH
 and their .ji files exist before we compile the parent module.
@@ -741,16 +792,9 @@ function find_pkg_uuid(name::String)
       return deps[name][1]["uuid"]
     end
   end
-  # Search registries (use invokelatest to avoid world age issues in compilecache subprocesses)
-  try
-    Reg = Pkg.Registry
-    for reg in Base.invokelatest(Reg.reachable_registries)
-      for uuid in Base.invokelatest(Reg.uuids_from_name, reg, name)
-        return string(uuid)
-      end
-    end
-  catch
-  end
+  # Search registries via direct TOML reads
+  uuid = registry_uuid(name)
+  !isnothing(uuid) && return uuid
   nothing
 end
 
