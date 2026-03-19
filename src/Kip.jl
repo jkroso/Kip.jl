@@ -781,16 +781,11 @@ function create_cache_package(path::String, hash::String, name::String, source::
   uuid = "$uuid"
   $deps_toml""")
 
-  # Symlink unified Manifest.toml so compilecache subprocess can find packages
-  if !isnothing(env_dir)
-    manifest_src = joinpath(env_dir, "Manifest.toml")
-    manifest_dest = joinpath(pkg_dir, "Manifest.toml")
-    if manifest_src != manifest_dest && isfile(manifest_src) && !islink(manifest_dest)
-      rm(manifest_dest; force=true)
-      symlink(manifest_src, manifest_dest)
-    end
-  elseif !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
-    # Fallback: per-module Pkg.resolve when no unified env is available
+  # Resolve Manifest.toml so compilecache subprocess can find Julia packages.
+  # We avoid symlinking the active project's Manifest because it may contain
+  # `path = "."` entries (e.g. for Kip itself) that resolve incorrectly
+  # relative to the cache directory rather than the original project.
+  if !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
     try
       old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
       ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"

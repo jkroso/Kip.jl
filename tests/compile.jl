@@ -57,6 +57,35 @@ const fixtures = joinpath(@__DIR__, "fixtures")
     @test mod.to_json(Dict("a" => 1)) isa String
   end
 
+  @testset "transitive 3rd party package deps resolve in cache manifest" begin
+    # Reproduces: "Cannot locate source for PrettyPrinting" when a Kip dep
+    # uses a Julia package that isn't in the active project's Manifest.toml
+    path = realpath(joinpath(fixtures, "dep_uses_pkg.jl"))
+    source = read(path, String)
+    hash = Kip.source_hash(source)
+    name = Kip.valid_identifier(replace(Kip.pkgname(path), r"[^\w]" => "_") * "_" * hash[1:12])
+    pkg_dir = joinpath(Kip.cache, hash)
+    # Clean any existing cache so create_cache_package runs fresh
+    rm(pkg_dir, recursive=true, force=true)
+    # Use the Kip project dir as env_dir — its Manifest does NOT have JSON3
+    env_dir = joinpath(@__DIR__, "..")
+    Kip.create_cache_package(path, hash, name, source; env_dir)
+    manifest_path = joinpath(pkg_dir, "Manifest.toml")
+    @test isfile(manifest_path)
+    manifest = Kip.TOML.parsefile(manifest_path)
+    manifest_deps = get(manifest, "deps", Dict())
+    @test haskey(manifest_deps, "JSON3")
+  end
+
+  @testset "dep with transitive 3rd party package loads correctly" begin
+    # End-to-end test: loading a module whose Kip dep uses a 3rd party package
+    path = realpath(joinpath(fixtures, "has_dep_with_pkg.jl"))
+    delete!(Kip.modules, path)
+    mod = Kip.load_module(path)
+    @test isdefined(mod, :show_json)
+    @test Base.invokelatest(mod.show_json, Dict("a" => 1)) isa String
+  end
+
   @testset "installed() checks initial_pwd Project.toml" begin
     # stdlib packages are always installed
     @test Kip.installed("Dates")
