@@ -552,7 +552,10 @@ function with_load_path(f)
     if p isa String
       push!(paths, p)
     elseif p == "@"
-      push!(paths, "@")
+      # Resolve @ to actual project dir so the compilecache subprocess
+      # sees the user's Manifest.toml (not the synthetic cache package's)
+      proj = Base.active_project()
+      !isnothing(proj) && push!(paths, dirname(proj))
     elseif p == "@stdlib"
       push!(paths, "@stdlib")
     elseif p == "@v#.#"
