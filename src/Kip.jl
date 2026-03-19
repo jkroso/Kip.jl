@@ -708,6 +708,21 @@ function ensure_compiled!(path::String, name::String=pkgname(path))
 
   # Compile only — don't load
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
+  # DEBUG: show what the subprocess will see
+  wrapper_content = read(src_path, String)
+  for line in split(wrapper_content, "\n")
+    m = match(r"Base\.require\(Base\.PkgId\(Base\.UUID\(\"([^\"]+)\"\), \"([^\"]+)\"\)\)", line)
+    isnothing(m) && continue
+    dep_uuid, dep_name = m[1], m[2]
+    dep_pkg_id = Base.PkgId(Base.UUID(dep_uuid), dep_name)
+    on_lp = any(p -> begin
+      expanded = Base.load_path_expand(p)
+      expanded !== nothing && isfile(joinpath(dirname(expanded), "Project.toml")) &&
+        get(TOML.parsefile(joinpath(dirname(expanded), "Project.toml")), "name", "") == dep_name
+    end, LOAD_PATH)
+    lp = Base.locate_package(dep_pkg_id)
+    @debug "compilecache dep check" cache_name dep_name on_load_path=on_lp locate=lp loaded=haskey(Base.loaded_modules, dep_pkg_id)
+  end
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
   old_git_prompt = get(ENV, "GIT_TERMINAL_PROMPT", nothing)
   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
@@ -923,6 +938,7 @@ repeated calls to the same file always return the exact same Module (`===`).
 """
 function load_module(path, name=pkgname(path))
   path = realpath(path)
+  name = pkgname(path) # re-derive from realpath to get canonical case
   haskey(modules, path) && return modules[path]
   mod = try
     load_from_cache(path, name)
