@@ -517,9 +517,7 @@ function compile_single(path::String, name::String; output_dir::Union{String,Not
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   stderr_buf = IOBuffer()
   try
-    ji_path, _ = with_load_path() do
-      Base.compilecache(pkg_id, src_path, stderr_buf)
-    end
+    ji_path, _ = Base.compilecache(pkg_id, src_path, stderr_buf)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
     return ji_path
@@ -544,35 +542,6 @@ end
 
 const _precompiling = Set{String}()
 
-"Propagate current LOAD_PATH to compilecache subprocesses via JULIA_LOAD_PATH"
-function with_load_path(f)
-  old = get(ENV, "JULIA_LOAD_PATH", nothing)
-  paths = String[]
-  for p in LOAD_PATH
-    if p isa String
-      push!(paths, p)
-    elseif p == "@"
-      # Resolve @ to actual project dir so the compilecache subprocess
-      # sees the user's Manifest.toml (not the synthetic cache package's)
-      proj = Base.active_project()
-      !isnothing(proj) && push!(paths, dirname(proj))
-    elseif p == "@stdlib"
-      push!(paths, "@stdlib")
-    elseif p == "@v#.#"
-      push!(paths, "@v#.#")
-    end
-  end
-  ENV["JULIA_LOAD_PATH"] = join(paths, Sys.iswindows() ? ';' : ':')
-  try
-    f()
-  finally
-    if isnothing(old)
-      delete!(ENV, "JULIA_LOAD_PATH")
-    else
-      ENV["JULIA_LOAD_PATH"] = old
-    end
-  end
-end
 
 "Compute (dep_path, cache_name) pairs for all file-based @use deps of a source file"
 function collect_file_dep_info(source::String, base::String)
@@ -702,9 +671,7 @@ function ensure_compiled!(path::String, name::String=pkgname(path))
   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   try
-    with_load_path() do
-      Base.compilecache(pkg_id, src_path)
-    end
+    Base.compilecache(pkg_id, src_path)
   finally
     if isnothing(old_auto)
       delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
@@ -769,11 +736,14 @@ function create_cache_package(path::String, hash::String, name::String, source::
   # Build Base.require lines for all deps
   require_lines = String[]
 
-  # Julia package deps
+  # Julia package deps (only if already installed — @use macro will install missing ones)
   for pkg in use_pkgs
     pkg ∈ ("Kip", "Base", "Core", "Main") && continue
     pkg_uuid = find_pkg_uuid(pkg)
-    !isnothing(pkg_uuid) && push!(require_lines,
+    isnothing(pkg_uuid) && continue
+    pkg_id = Base.PkgId(Base.UUID(pkg_uuid), pkg)
+    isnothing(Base.locate_package(pkg_id)) && continue
+    push!(require_lines,
       "Base.require(Base.PkgId(Base.UUID(\"$pkg_uuid\"), \"$pkg\"))")
   end
 
@@ -869,9 +839,7 @@ function load_from_cache(path::String, name::String)
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   stderr_buf = IOBuffer()
   try
-    ji_path, ocache_path = with_load_path() do
-      Base.compilecache(pkg_id, src_path, stderr_buf)
-    end
+    ji_path, ocache_path = Base.compilecache(pkg_id, src_path, stderr_buf)
     # Print any non-error stderr output (warnings, etc.)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
@@ -897,11 +865,6 @@ function load_from_cache(path::String, name::String)
       delete!(ENV, "GIT_TERMINAL_PROMPT")
     else
       ENV["GIT_TERMINAL_PROMPT"] = old_git_prompt
-    end
-    # In a compilecache subprocess, keep cache dirs on LOAD_PATH so Julia can
-    # locate dependency sources when serializing the parent module
-    if !Base.generating_output()
-      filter!(p -> p != pkg_dir && p ∉ dep_dirs, LOAD_PATH)
     end
   end
 end

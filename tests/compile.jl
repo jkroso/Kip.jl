@@ -86,6 +86,31 @@ const fixtures = joinpath(@__DIR__, "fixtures")
     @test Base.invokelatest(mod.show_json, Dict("a" => 1)) isa String
   end
 
+  @testset "dep with uninstalled Julia package still loads (via fallback)" begin
+    # When a Kip dep uses a Julia package not in the active manifest,
+    # compilation falls back to include, the @use macro installs it,
+    # and the dep chain still works. This tests that:
+    # 1. Uninstalled packages don't break wrapper generation
+    # 2. LOAD_PATH cleanup doesn't cause cascade failures
+    path = realpath(joinpath(fixtures, "has_dep_with_missing_pkg.jl"))
+    delete!(Kip.modules, path)
+    # Also clear the dep so it's loaded fresh
+    dep_path = realpath(joinpath(fixtures, "dep_uses_missing_pkg.jl"))
+    delete!(Kip.modules, dep_path)
+    mod = Kip.load_module(path)
+    @test isdefined(mod, :show_value)
+  end
+
+  @testset "3-level file dep chain compiles successfully" begin
+    path = realpath(joinpath(fixtures, "dep_level1.jl"))
+    delete!(Kip.modules, path)
+    delete!(Kip.modules, realpath(joinpath(fixtures, "dep_level2.jl")))
+    delete!(Kip.modules, realpath(joinpath(fixtures, "dep_level3.jl")))
+    mod = Kip.load_module(path)
+    @test isdefined(mod, :dodecatuple)
+    @test Base.invokelatest(mod.dodecatuple, 1) == 12
+  end
+
   @testset "installed() checks initial_pwd Project.toml" begin
     # stdlib packages are always installed
     @test Kip.installed("Dates")
