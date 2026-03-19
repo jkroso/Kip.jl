@@ -17,7 +17,6 @@ __init__() = begin
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
   global cache = joinpath(home, "cache")
-  global envs = joinpath(home, "envs")
   global stdlib = Set(readdir(Sys.STDLIB))
   global stdlib_uuids = Dict{String,String}()
   for d in readdir(Sys.STDLIB)
@@ -459,72 +458,6 @@ function collect_all_deps(entry_path::String)
 end
 
 """
-Create a unified environment with all Julia package deps resolved together.
-Returns the env directory path.
-"""
-function resolve_environment(all_packages::Set{String}, pkg3_repos::Vector{String}=String[])
-  # Filter out packages that are part of Kip's own deps or don't need resolution
-  pkgs_to_resolve = filter(all_packages) do pkg
-    pkg ∉ ("Kip", "Base", "Core", "Main", "InteractiveUtils") && pkg ∉ stdlib
-  end
-
-  # Compute hash from sorted package names for stable env identity
-  pkg_list = sort(collect(pkgs_to_resolve))
-  hash_input = join(pkg_list, "\n") * "\n" * join(sort(pkg3_repos), "\n")
-  env_hash = source_hash(hash_input)
-  env_dir = joinpath(envs, env_hash[1:16])
-
-  # Return existing env if already resolved
-  if isfile(joinpath(env_dir, "Manifest.toml"))
-    return env_dir
-  end
-
-  mkpath(env_dir)
-
-  # Build Project.toml with all deps
-  deps_lines = String[]
-  for pkg in pkg_list
-    uuid = find_pkg_uuid(pkg)
-    !isnothing(uuid) && push!(deps_lines, "$pkg = \"$uuid\"")
-  end
-
-  deps_toml = isempty(deps_lines) ? "" : "\n[deps]\n" * join(deps_lines, "\n") * "\n"
-
-  write(joinpath(env_dir, "Project.toml"), """
-  name = "KipEnv"
-  uuid = "$(deterministic_uuid(env_hash))"
-  $deps_toml""")
-
-  # Resolve and instantiate
-  old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
-  ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
-  try
-    Pkg.activate(env_dir) do
-      # Add Pkg3 github repos via develop
-      for repo_path in pkg3_repos
-        try
-          Pkg.develop(path=repo_path)
-        catch e
-          @debug "Failed to Pkg.develop $repo_path" exception=e
-        end
-      end
-      redirect_stderr(devnull) do
-        Pkg.resolve(io=devnull)
-        Pkg.instantiate(io=devnull)
-      end
-    end
-  finally
-    if isnothing(old_auto)
-      delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
-    else
-      ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
-    end
-  end
-
-  env_dir
-end
-
-"""
     compile(path::String) -> String
 
 Compile all transitive `@use` deps of a Kip entry file. The entry file acts
@@ -545,35 +478,24 @@ function compile(path::String)
   # Walk the full dependency tree
   all_packages, file_deps, pkg3_repos = collect_all_deps(path)
 
-  # Create unified environment for all Julia package deps
-  env_dir = if isempty(all_packages) && isempty(pkg3_repos)
-    nothing
-  else
-    resolve_environment(all_packages, pkg3_repos)
-  end
-
-  # Set up LOAD_PATH so compilecache subprocesses can find everything
-  if !isnothing(env_dir) && env_dir ∉ LOAD_PATH
-    pushfirst!(LOAD_PATH, env_dir)
-  end
-
   # Compile all deps in post-order, skipping the main file itself
   for (dep_path, dep_name) in file_deps
     dep_path == path && continue
-    compile_single(dep_path, dep_name, env_dir; output_dir)
+    compile_single(dep_path, dep_name; output_dir)
   end
   path
 end
 
 "Compile a single file to a .ji cache. Returns .ji path on success, .jl path on failure."
-function compile_single(path::String, name::String, env_dir::Union{String,Nothing}; output_dir::Union{String,Nothing}=nothing)
+function compile_single(path::String, name::String; output_dir::Union{String,Nothing}=nothing)
   source = read(path, String)
   hash = source_hash(source)
   cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
   # Place the synthetic package in output_dir if provided, otherwise global cache
-  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir, output_dir)
+  file_dep_info = collect_file_dep_info(source, dirname(path))
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; file_deps=file_dep_info, output_dir)
 
   # Already compiled? Return existing .ji
   cache_dir = Base.compilecache_dir(pkg_id)
@@ -595,7 +517,9 @@ function compile_single(path::String, name::String, env_dir::Union{String,Nothin
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   stderr_buf = IOBuffer()
   try
-    ji_path, _ = Base.compilecache(pkg_id, src_path, stderr_buf)
+    ji_path, _ = with_load_path() do
+      Base.compilecache(pkg_id, src_path, stderr_buf)
+    end
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
     return ji_path
@@ -619,9 +543,6 @@ function compile_single(path::String, name::String, env_dir::Union{String,Nothin
 end
 
 const _precompiling = Set{String}()
-const _resolved_entries = Dict{String, Tuple{String, String}}()  # entry_path => (env_dir, content_hash)
-const _current_env_dir = Ref{Union{String,Nothing}}(nothing)  # set by ensure_environment!, read by load_from_cache
-const _entry_file = Ref{Union{String,Nothing}}(nothing)  # true entry point, set once on first @use
 
 "Propagate current LOAD_PATH to compilecache subprocesses via JULIA_LOAD_PATH"
 function with_load_path(f)
@@ -648,6 +569,19 @@ function with_load_path(f)
       ENV["JULIA_LOAD_PATH"] = old
     end
   end
+end
+
+"Compute (dep_path, cache_name) pairs for all file-based @use deps of a source file"
+function collect_file_dep_info(source::String, base::String)
+  file_dep_info = Tuple{String,String}[]
+  for (fdp, _) in find_use_deps(source, base)
+    fds = read(fdp, String)
+    fdh = source_hash(fds)
+    fdn = pkgname(fdp)
+    fdcn = valid_identifier(replace(fdn, r"[^\w]" => "_") * "_" * fdh[1:12])
+    push!(file_dep_info, (fdp, fdcn))
+  end
+  file_dep_info
 end
 
 const _registry_cache = Ref{Union{Nothing, Dict{String,String}}}(nothing)
@@ -697,15 +631,9 @@ function precompile_deps!(path::String)
     pkg_dir = joinpath(cache, hash)
     pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
     # Ensure the cache package dir exists and is on LOAD_PATH
-    env_dir = _current_env_dir[]
-    if isnothing(env_dir)
-      proj = Base.active_project()
-      if !isnothing(proj) && isfile(joinpath(dirname(proj), "Manifest.toml"))
-        env_dir = dirname(proj)
-      end
-    end
     if !isdir(joinpath(pkg_dir, "src"))
-      create_cache_package(dep_path, hash, cache_name, dep_source; env_dir)
+      dep_file_dep_info = collect_file_dep_info(dep_source, dirname(dep_path))
+      create_cache_package(dep_path, hash, cache_name, dep_source; file_deps=dep_file_dep_info)
     end
     if pkg_dir ∉ LOAD_PATH
       pushfirst!(LOAD_PATH, pkg_dir)
@@ -745,15 +673,9 @@ function ensure_compiled!(path::String, name::String=pkgname(path))
 
   # Create cache package if needed
   pkg_dir = joinpath(cache, hash)
-  env_dir = _current_env_dir[]
-  if isnothing(env_dir)
-    proj = Base.active_project()
-    if !isnothing(proj) && isfile(joinpath(dirname(proj), "Manifest.toml"))
-      env_dir = dirname(proj)
-    end
-  end
   if !isdir(joinpath(pkg_dir, "src"))
-    create_cache_package(path, hash, cache_name, source; env_dir)
+    file_dep_info = collect_file_dep_info(source, dirname(path))
+    create_cache_package(path, hash, cache_name, source; file_deps=file_dep_info)
   end
 
   # Compile only — don't load
@@ -763,7 +685,9 @@ function ensure_compiled!(path::String, name::String=pkgname(path))
   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   try
-    Base.compilecache(pkg_id, src_path)
+    with_load_path() do
+      Base.compilecache(pkg_id, src_path)
+    end
   finally
     if isnothing(old_auto)
       delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
@@ -799,7 +723,7 @@ function find_pkg_uuid(name::String)
 end
 
 "Create a synthetic package for compilecache"
-function create_cache_package(path::String, hash::String, name::String, source::String=read(path, String); env_dir::Union{String,Nothing}=nothing, output_dir::Union{String,Nothing}=nothing)
+function create_cache_package(path::String, hash::String, name::String, source::String=read(path, String); file_deps::Vector{Tuple{String,String}}=Tuple{String,String}[], output_dir::Union{String,Nothing}=nothing)
   pkg_dir = joinpath(something(output_dir, cache), hash)
   src_dir = joinpath(pkg_dir, "src")
   mkpath(src_dir)
@@ -825,44 +749,44 @@ function create_cache_package(path::String, hash::String, name::String, source::
   uuid = "$uuid"
   $deps_toml""")
 
-  # Resolve Manifest.toml so compilecache subprocess can find Julia packages.
-  # We avoid symlinking the active project's Manifest because it may contain
-  # `path = "."` entries (e.g. for Kip itself) that resolve incorrectly
-  # relative to the cache directory rather than the original project.
-  if !isempty(use_pkgs) && !isfile(joinpath(pkg_dir, "Manifest.toml")) && !Base.generating_output()
-    try
-      old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
-      ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
-      Pkg.activate(pkg_dir) do
-        redirect_stderr(devnull) do
-          Pkg.resolve(io=devnull)
-        end
-      end
-      if isnothing(old_auto)
-        delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
-      else
-        ENV["JULIA_PKG_PRECOMPILE_AUTO"] = old_auto
-      end
-    catch e
-      @debug "Pkg.resolve failed for cache package" exception=e
-    end
+  # Build Base.require lines for all deps
+  require_lines = String[]
+
+  # Julia package deps
+  for pkg in use_pkgs
+    pkg ∈ ("Kip", "Base", "Core", "Main") && continue
+    pkg_uuid = find_pkg_uuid(pkg)
+    !isnothing(pkg_uuid) && push!(require_lines,
+      "Base.require(Base.PkgId(Base.UUID(\"$pkg_uuid\"), \"$pkg\"))")
   end
+
+  # Kip file deps
+  for (dep_path, dep_cache_name) in file_deps
+    dep_source = read(dep_path, String)
+    dep_hash = source_hash(dep_source)
+    dep_uuid = deterministic_uuid(dep_hash)
+    push!(require_lines,
+      "Base.require(Base.PkgId(Base.UUID(\"$dep_uuid\"), \"$dep_cache_name\"))")
+  end
+
+  require_block = join(require_lines, "\n")
 
   # Generate wrapper source
   if has_kip_macros
-    # Inject Kip via Base.require(PkgId) to bypass manifest check
     write(joinpath(src_dir, "$name.jl"), """
     module $name
     const _Kip = Base.require(Base.PkgId(Base.UUID("$kip_uuid"), "Kip"))
     const var"@use" = getfield(_Kip, Symbol("@use"))
     const var"@dirname" = getfield(_Kip, Symbol("@dirname"))
     const require = getfield(_Kip, :require)
+    $require_block
     Base.include(@__MODULE__, $(repr(path)))
     end
     """)
   else
     write(joinpath(src_dir, "$name.jl"), """
     module $name
+    $require_block
     Base.include(@__MODULE__, $(repr(path)))
     end
     """)
@@ -906,7 +830,7 @@ function load_from_cache(path::String, name::String)
       try
         mod = Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
         if Base.generating_output()
-          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name, source; env_dir)
+          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name, source)
         end
         return mod
       catch
@@ -918,14 +842,8 @@ function load_from_cache(path::String, name::String)
   end
 
   # No valid cache found, compile
-  env_dir = _current_env_dir[]
-  if isnothing(env_dir)
-    proj = Base.active_project()
-    if !isnothing(proj) && isfile(joinpath(dirname(proj), "Manifest.toml"))
-      env_dir = dirname(proj)
-    end
-  end
-  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; env_dir)
+  file_dep_info = collect_file_dep_info(source, dirname(path))
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; file_deps=file_dep_info)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
   # Suppress Pkg auto-precompilation noise and git credential prompts in the compilecache subprocess
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
@@ -934,7 +852,9 @@ function load_from_cache(path::String, name::String)
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   stderr_buf = IOBuffer()
   try
-    ji_path, ocache_path = Base.compilecache(pkg_id, src_path, stderr_buf)
+    ji_path, ocache_path = with_load_path() do
+      Base.compilecache(pkg_id, src_path, stderr_buf)
+    end
     # Print any non-error stderr output (warnings, etc.)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
