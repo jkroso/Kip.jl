@@ -797,6 +797,12 @@ function load_from_cache(path::String, name::String)
     return Base.loaded_modules[pkg_id]
   end
 
+  # Ensure the user's project is on LOAD_PATH so compilecache subprocesses
+  # can find packages installed there by @use macros in other modules
+  if initial_pwd ∉ LOAD_PATH
+    pushfirst!(LOAD_PATH, initial_pwd)
+  end
+
   # Ensure deps' cache dirs are on LOAD_PATH before loading from cache
   # (needed for _require_from_serialized to locate dependency modules)
   dep_dirs = precompile_deps!(path)
