@@ -63,7 +63,7 @@ const fixtures = joinpath(@__DIR__, "fixtures")
     path = realpath(joinpath(fixtures, "dep_uses_pkg.jl"))
     source = read(path, String)
     hash = Kip.source_hash(source)
-    name = Kip.valid_identifier(replace(Kip.pkgname(path), r"[^\w]" => "_") * "_" * hash[1:12])
+    name = Kip.valid_identifier(replace(Kip.pkgname(path), r"[^\w]" => "_") * "_" * hash[1:3])
     pkg_dir = joinpath(Kip.cache, hash)
     # Clean any existing cache so create_cache_package runs fresh
     rm(pkg_dir, recursive=true, force=true)
@@ -129,7 +129,7 @@ end
     # Should not have produced a .ji file since precompilation is disabled
     source = read(path, String)
     hash = Kip.source_hash(source)
-    name = Kip.valid_identifier(replace(Kip.pkgname(path), r"[^\w]" => "_") * "_" * hash[1:12])
+    name = Kip.valid_identifier(replace(Kip.pkgname(path), r"[^\w]" => "_") * "_" * hash[1:3])
     pkg_id = Base.PkgId(Kip.deterministic_uuid(hash), name)
     cache_dir = Base.compilecache_dir(pkg_id)
     has_ji = isdir(cache_dir) && any(f -> endswith(f, ".ji"), readdir(cache_dir))
@@ -204,7 +204,7 @@ end
       # Grab the .ji path for v1
       src1 = read(rpath, String)
       hash1 = Kip.source_hash(src1)
-      name1 = Kip.valid_identifier(replace(Kip.pkgname(rpath), r"[^\w]" => "_") * "_" * hash1[1:12])
+      name1 = Kip.valid_identifier(replace(Kip.pkgname(rpath), r"[^\w]" => "_") * "_" * hash1[1:3])
       pkg_id1 = Base.PkgId(Kip.deterministic_uuid(hash1), name1)
       cache_dir1 = Base.compilecache_dir(pkg_id1)
       @test isdir(cache_dir1)
@@ -221,7 +221,7 @@ end
       src2 = read(rpath, String)
       hash2 = Kip.source_hash(src2)
       @test hash1 != hash2
-      name2 = Kip.valid_identifier(replace(Kip.pkgname(rpath), r"[^\w]" => "_") * "_" * hash2[1:12])
+      name2 = Kip.valid_identifier(replace(Kip.pkgname(rpath), r"[^\w]" => "_") * "_" * hash2[1:3])
       pkg_id2 = Base.PkgId(Kip.deterministic_uuid(hash2), name2)
       cache_dir2 = Base.compilecache_dir(pkg_id2)
       @test isdir(cache_dir2)

@@ -490,7 +490,7 @@ end
 function compile_single(path::String, name::String; output_dir::Union{String,Nothing}=nothing)
   source = read(path, String)
   hash = source_hash(source)
-  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
+  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:3])
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
   # Place the synthetic package in output_dir if provided, otherwise global cache
@@ -550,7 +550,7 @@ function collect_file_dep_info(source::String, base::String)
     fds = read(fdp, String)
     fdh = source_hash(fds)
     fdn = pkgname(fdp)
-    fdcn = valid_identifier(replace(fdn, r"[^\w]" => "_") * "_" * fdh[1:12])
+    fdcn = valid_identifier(replace(fdn, r"[^\w]" => "_") * "_" * fdh[1:3])
     push!(file_dep_info, (fdp, fdcn))
   end
   file_dep_info
@@ -655,7 +655,7 @@ function precompile_deps!(path::String)
     dep_source = read(dep_path, String)
     hash = source_hash(dep_source)
     canonical_name = pkgname(dep_path)
-    cache_name = valid_identifier(replace(canonical_name, r"[^\w]" => "_") * "_" * hash[1:12])
+    cache_name = valid_identifier(replace(canonical_name, r"[^\w]" => "_") * "_" * hash[1:3])
     pkg_dir = joinpath(cache, hash)
     pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
     # Ensure the cache package dir exists and is on LOAD_PATH
@@ -687,7 +687,7 @@ compilecache subprocess without causing duplicate module loads at runtime."""
 function ensure_compiled!(path::String, name::String=pkgname(path))
   source = read(path, String)
   hash = source_hash(source)
-  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
+  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:3])
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
   # Already compiled
@@ -840,7 +840,7 @@ end
 function load_from_cache(path::String, name::String)
   source = read(path, String)
   hash = source_hash(source)
-  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:12])
+  cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:3])
   pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
 
   nocompile_marker = joinpath(cache, hash, ".noprecompile")
