@@ -231,3 +231,73 @@ end
     end
   end
 end
+
+@testset "project switching with shared nested deps" begin
+  kip_root = dirname(@__DIR__)
+  julia = joinpath(Sys.BINDIR, Base.julia_exename())
+
+  # Run the full test in a subprocess to avoid stale state from the test process.
+  # The subprocess creates temp dirs, loads project A, modifies shared deps,
+  # loads project B, and verifies project B uses the new versions.
+  script = """
+  pushfirst!(LOAD_PATH, $(repr(kip_root)))
+  using Kip
+
+  tmp = mktempdir()
+  shared = joinpath(tmp, "shared")
+  proj_a = joinpath(tmp, "project_a")
+  proj_b = joinpath(tmp, "project_b")
+  mkpath(shared); mkpath(proj_a); mkpath(proj_b)
+
+  # V1 of shared deps
+  write(joinpath(shared, "leaf.jl"), "greet() = \\"hello\\"\\n")
+  write(joinpath(shared, "middle.jl"), "@use \\"./leaf.jl\\" greet\\nelaborate() = greet() * \\" world\\"\\n")
+  write(joinpath(proj_a, "entry.jl"), "@use \\"../shared/middle.jl\\" elaborate\\nfrom_a() = elaborate() * \\" from A\\"\\n")
+  write(joinpath(proj_b, "entry.jl"), "@use \\"../shared/middle.jl\\" elaborate\\nfrom_b() = elaborate() * \\" from B\\"\\n")
+
+  # Load project A
+  mod_a = Kip.load_module(realpath(joinpath(proj_a, "entry.jl")))
+  result_a = Base.invokelatest(mod_a.from_a)
+  println("A:\$result_a")
+
+  # Modify shared deps (new content → new hash)
+  write(joinpath(shared, "leaf.jl"), "greet() = \\"hi\\"\\n")
+  write(joinpath(shared, "middle.jl"), "@use \\"./leaf.jl\\" greet\\nelaborate() = greet() * \\" earth\\"\\n")
+
+  # Clear module identity cache
+  leaf_rp = realpath(joinpath(shared, "leaf.jl"))
+  middle_rp = realpath(joinpath(shared, "middle.jl"))
+  println("MODULES BEFORE DELETE: ", join(keys(Kip.modules), " | "))
+  println("LEAF_RP: ", leaf_rp)
+  println("MIDDLE_RP: ", middle_rp)
+  delete!(Kip.modules, leaf_rp)
+  delete!(Kip.modules, middle_rp)
+  println("MODULES AFTER DELETE: ", join(keys(Kip.modules), " | "))
+
+  # Load project B with modified deps
+  mod_b = Kip.load_module(realpath(joinpath(proj_b, "entry.jl")))
+  result_b = Base.invokelatest(mod_b.from_b)
+  println("B:\$result_b")
+
+  # Check if shared deps loaded from cache
+  for path in [realpath(joinpath(shared, "middle.jl")), realpath(joinpath(shared, "leaf.jl"))]
+    source = read(path, String)
+    hash = Kip.source_hash(source)
+    name = Kip.valid_identifier(replace(Kip.pkgname(path), r"[^\\w]" => "_") * "_" * hash[1:3])
+    pkg_id = Base.PkgId(Kip.deterministic_uuid(hash), name)
+    cached = haskey(Base.loaded_modules, pkg_id)
+    println("CACHED \$(Kip.pkgname(path)):\$cached")
+  end
+  """
+
+  errfile = tempname()
+  out = read(pipeline(Cmd(`$julia --startup-file=no --project=$kip_root -e $script`), stderr=errfile), String)
+  err = isfile(errfile) ? read(errfile, String) : ""
+  rm(errfile, force=true)
+  # Print stderr for debugging
+  !isempty(err) && println("SUBPROCESS STDERR:\n", err)
+  @test occursin("A:hello world from A", out)
+  @test occursin("B:hi earth from B", out)
+  @test occursin("CACHED middle:true", out)
+  @test occursin("CACHED leaf:true", out)
+end

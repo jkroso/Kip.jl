@@ -540,7 +540,6 @@ function compile_single(path::String, name::String; output_dir::Union{String,Not
   end
 end
 
-const _precompiling = Set{String}()
 
 
 "Compute (dep_path, cache_name) pairs for all file-based @use deps of a source file"
@@ -641,15 +640,15 @@ Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PAT
 and their .ji files exist before we compile the parent module.
 Returns list of cache dirs added to LOAD_PATH.
 """
-function precompile_deps!(path::String)
-  path in _precompiling && return String[]
-  push!(_precompiling, path)
+function precompile_deps!(path::String; visited::Set{String}=Set{String}())
+  path in visited && return String[]
+  push!(visited, path)
   dirs = String[]
   source = read(path, String)
   base = dirname(path)
   for (dep_path, _dep_name) in find_use_deps(source, base)
     # Recursively pre-compile this dep's deps first
-    append!(dirs, precompile_deps!(dep_path))
+    append!(dirs, precompile_deps!(dep_path; visited))
     # Use pkgname(dep_path) for a consistent cache name regardless of how
     # the file was referenced (git hash, relative path, etc.)
     dep_source = read(dep_path, String)
@@ -658,11 +657,11 @@ function precompile_deps!(path::String)
     cache_name = valid_identifier(replace(canonical_name, r"[^\w]" => "_") * "_" * hash[1:3])
     pkg_dir = joinpath(cache, hash)
     pkg_id = Base.PkgId(deterministic_uuid(hash), cache_name)
-    # Ensure the cache package dir exists and is on LOAD_PATH
-    if !isdir(joinpath(pkg_dir, "src"))
-      dep_file_dep_info = collect_file_dep_info(dep_source, dirname(dep_path))
-      create_cache_package(dep_path, hash, cache_name, dep_source; file_deps=dep_file_dep_info)
-    end
+    # Always create/update the cache package so the wrapper reflects current
+    # dep hashes. This ensures stale .ji files are detected by Julia's
+    # compilation system when transitive deps have changed.
+    dep_file_dep_info = collect_file_dep_info(dep_source, dirname(dep_path))
+    create_cache_package(dep_path, hash, cache_name, dep_source; file_deps=dep_file_dep_info)
     if pkg_dir ∉ LOAD_PATH
       pushfirst!(LOAD_PATH, pkg_dir)
       push!(dirs, pkg_dir)
@@ -672,7 +671,7 @@ function precompile_deps!(path::String)
     # as part of the parent's dependency chain, avoiding duplicate loads
     if !Base.generating_output() && !isdir(Base.compilecache_dir(pkg_id))
       try
-        ensure_compiled!(dep_path)
+        ensure_compiled!(dep_path; visited)
       catch
         # Compilation failed; parent will also fail or fall back
       end
@@ -684,7 +683,7 @@ end
 """Compile a file's cache .ji without loading the module into the process.
 Used by precompile_deps! to ensure .ji files exist for the parent's
 compilecache subprocess without causing duplicate module loads at runtime."""
-function ensure_compiled!(path::String, name::String=pkgname(path))
+function ensure_compiled!(path::String, name::String=pkgname(path); visited::Set{String}=Set{String}())
   source = read(path, String)
   hash = source_hash(source)
   cache_name = valid_identifier(replace(name, r"[^\w]" => "_") * "_" * hash[1:3])
@@ -697,7 +696,7 @@ function ensure_compiled!(path::String, name::String=pkgname(path))
   end
 
   # Recursively ensure deps are compiled first
-  precompile_deps!(path)
+  precompile_deps!(path; visited)
 
   # Create cache package if needed
   pkg_dir = joinpath(cache, hash)
@@ -863,7 +862,13 @@ function load_from_cache(path::String, name::String)
   # Ensure deps' cache dirs are on LOAD_PATH before loading from cache
   # (needed for _require_from_serialized to locate dependency modules)
   dep_dirs = precompile_deps!(path)
-  pkg_dir = joinpath(cache, hash)
+
+  # Always create/update the cache package (wrapper) BEFORE checking for
+  # existing .ji files. The wrapper includes Base.require lines for current
+  # dep hashes; if deps changed, the wrapper content changes, causing Julia
+  # to detect the .ji as stale and trigger recompilation.
+  file_dep_info = collect_file_dep_info(source, dirname(path))
+  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; file_deps=file_dep_info)
   if pkg_dir ∉ LOAD_PATH
     pushfirst!(LOAD_PATH, pkg_dir)
     push!(dep_dirs, pkg_dir)
@@ -879,9 +884,6 @@ function load_from_cache(path::String, name::String)
       ocache_path = isfile(ocache) ? ocache : nothing
       try
         mod = Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
-        if Base.generating_output()
-          isdir(joinpath(pkg_dir, "src")) || create_cache_package(path, hash, cache_name, source)
-        end
         return mod
       catch
         # Stale cache, recompile
@@ -890,10 +892,6 @@ function load_from_cache(path::String, name::String)
       end
     end
   end
-
-  # No valid cache found, compile
-  file_dep_info = collect_file_dep_info(source, dirname(path))
-  pkg_dir, pkg_id = create_cache_package(path, hash, cache_name, source; file_deps=file_dep_info)
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
   # Suppress Pkg auto-precompilation noise and git credential prompts in the compilecache subprocess
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
