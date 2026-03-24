@@ -815,10 +815,10 @@ function create_cache_package(path::String, hash::String, name::String, source::
   if has_kip_macros
     write(joinpath(src_dir, "$name.jl"), """
     module $name
-    const _Kip = Base.require(Base.PkgId(Base.UUID("$kip_uuid"), "Kip"))
-    const var"@use" = getfield(_Kip, Symbol("@use"))
-    const var"@dirname" = getfield(_Kip, Symbol("@dirname"))
-    const require = getfield(_Kip, :require)
+    const Kip = Base.require(Base.PkgId(Base.UUID("$kip_uuid"), "Kip"))
+    const var"@use" = getfield(Kip, Symbol("@use"))
+    const var"@dirname" = getfield(Kip, Symbol("@dirname"))
+    const require = getfield(Kip, :require)
     $require_block
     Base.include(@__MODULE__, $(repr(path)))
     end
