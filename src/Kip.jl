@@ -321,10 +321,10 @@ function find_use_packages(source::String)
   for line in split(source, "\n")
     line = strip(line)
     # Match @use PkgName, @use PkgName:..., @use PkgName.sub, @use PkgName name1 name2
-    m = match(r"^@use\s+([A-Z]\w*)", line)
+    m = match(r"^@use\s+([A-Za-z]\w*)", line)
     !isnothing(m) && m[1] ∉ pkgs && push!(pkgs, m[1])
     # Also match @use (PkgName.sub)
-    m2 = match(r"^@use\s+\(?([A-Z]\w*)[\.\)]", line)
+    m2 = match(r"^@use\s+\(?([A-Za-z]\w*)[\.\)]", line)
     !isnothing(m2) && m2[1] ∉ pkgs && push!(pkgs, m2[1])
     # Match using/import PkgName
     m3 = match(r"^(?:using|import)\s+([A-Z]\w*)", line)
@@ -1019,6 +1019,9 @@ macro use(first, rest...)
     str = replace(repr(first), r"#= [^=]* =#" => "", "()" => "")
     str = replace(str, r"^:\({0,2}([^\)]+)\){0,2}$" => s"import \1")
     str = replace(str, r"^import (.*)\.{3}$" => s"using \1")
+    if length(rest) >= 2 && rest[1] === :as && rest[2] isa Symbol
+      str *= " as $(rest[2])"
+    end
     import_expr = Meta.parse(str)
     return quote
       if Kip.initial_pwd ∉ LOAD_PATH
