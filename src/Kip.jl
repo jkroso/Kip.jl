@@ -1040,6 +1040,15 @@ macro use(first, rest...)
       $(import_expr)
     end
   end
+  # Capture the source directory at macro expansion time so that require calls
+  # embedded in generated code (e.g. inside __init__) resolve relative paths
+  # correctly even after the include context has ended.
+  _src = string(__source__.file)
+  _base = if _src ∉ ("", "none") && isfile(_src)
+    dirname(realpath(_src))
+  else
+    source_dir()
+  end
   splatall = false
   if @capture(first, path_ => name_)
     name = esc(name)
@@ -1048,7 +1057,7 @@ macro use(first, rest...)
     name = Symbol(path)
   else
     @assert @capture(first, path_)
-    isempty(rest) && return :(require($path))
+    isempty(rest) && return :(require($path, $_base))
     name = Symbol(path)
   end
   names = collect(Any, rest) # make array
@@ -1096,12 +1105,12 @@ macro use(first, rest...)
     end
   end
   if isempty(exprs)
-    Meta.isexpr(name, :escape) ? :(const $name = require($path)) : :(require($path))
+    Meta.isexpr(name, :escape) ? :(const $name = require($path, $_base)) : :(require($path, $_base))
   elseif all(inbrackets, names) # all submodules
     quote $(exprs...) end
   else
     quote
-      const $name = require($path)
+      const $name = require($path, $_base)
       $(exprs...)
       $name
     end

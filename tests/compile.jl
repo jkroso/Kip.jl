@@ -160,6 +160,14 @@ end
   end
 end
 
+@testset "@use inside __init__ resolves relative paths" begin
+  path = realpath(joinpath(fixtures, "init_uses_dep.jl"))
+  delete!(Kip.modules, path)
+  mod = Kip.load_module(path)
+  @test mod.initialized[] == true
+  @test mod.dep_result[] == 42
+end
+
 @testset "__init__() called when precompilation fails" begin
   @testset "__init__ runs on fallback include path" begin
     path = realpath(joinpath(fixtures, "bad_module_with_init.jl"))
