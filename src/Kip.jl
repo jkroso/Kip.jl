@@ -958,6 +958,7 @@ function load_module(path)
     end
   end
   modules[path] = mod
+  Base.register_root_module(mod)
   mod
 end
 
