@@ -205,6 +205,11 @@ end
 
 const modules = Dict{String,Module}()
 
+# Paths whose module was produced via include-fallback (not precompiled).
+# Tracked so siblings that @use any of these paths can see the mismatch
+# and fall back too, keeping module identity consistent across the graph.
+const fallback_paths = Set{String}()
+
 "Require `path` relative to `base`"
 function require(path::AbstractString, base::AbstractString)
   startswith(path, "~/") && (path = homedir() * path[2:end])
@@ -636,6 +641,61 @@ function registry_uuid(name::String)
 end
 
 """
+Return `true` when the `.ji` cache at `ji_path` references source files
+that no longer exist on disk. Julia's own staleness check triggers a
+rebuild when source mtimes change — but if the `.ji` encodes a source
+path that was since moved or removed (e.g. Kip regenerated its cache
+wrapper under a new hash dir), Julia raises `Cannot locate source for X`
+inside a precompile subprocess, a hard error we never get to catch.
+Surfacing it here lets us invalidate the stale `.ji` before the
+subprocess ever sees it.
+"""
+function cache_sources_missing(ji_path::String)
+  try
+    _, srcfiles = Base.cache_dependencies(ji_path)
+    for src in srcfiles
+      isfile(src) || return true
+    end
+    return false
+  catch
+    # Unreadable cache — treat as stale so we rebuild.
+    return true
+  end
+end
+
+"""Return `true` when `pkg_id`'s cache dir contains at least one `.ji` file."""
+function has_valid_ji(pkg_id::Base.PkgId)
+  cache_dir = Base.compilecache_dir(pkg_id)
+  isdir(cache_dir) || return false
+  any(endswith(".ji"), readdir(cache_dir))
+end
+
+"""
+Delete any `.ji` (and its `.so`/`.dylib`/`.dSYM` siblings) under
+`pkg_id`'s cache dir whose recorded source paths are no longer present.
+Keeps the subprocess from trying to `_tryrequire_from_serialized` a
+cache whose sources have vanished, which would otherwise abort the
+parent's precompile with an uncatchable error.
+"""
+function invalidate_stale_cache!(pkg_id::Base.PkgId)
+  cache_dir = Base.compilecache_dir(pkg_id)
+  isdir(cache_dir) || return
+  for name in readdir(cache_dir)
+    endswith(name, ".ji") || continue
+    ji_path = joinpath(cache_dir, name)
+    cache_sources_missing(ji_path) || continue
+    stem = ji_path[1:end-3]
+    rm(ji_path, force=true)
+    for suffix in (".so", ".dylib", ".dll")
+      p = stem * suffix
+      isfile(p) && rm(p, force=true)
+    end
+    dsym = stem * ".dylib.dSYM"
+    isdir(dsym) && rm(dsym, recursive=true, force=true)
+  end
+end
+
+"""
 Pre-compile all @use path deps (recursively) so their cache dirs are on LOAD_PATH
 and their .ji files exist before we compile the parent module.
 Returns list of cache dirs added to LOAD_PATH.
@@ -666,10 +726,19 @@ function precompile_deps!(path::String; visited::Set{String}=Set{String}())
       pushfirst!(LOAD_PATH, pkg_dir)
       push!(dirs, pkg_dir)
     end
+    # Sweep stale .ji files whose recorded sources have moved (common when
+    # Kip regenerated the cache wrapper under a new hash dir). Without this
+    # the parent's compilecache subprocess would try to deserialize the
+    # stale cache and die with "Cannot locate source for X".
+    if !Base.generating_output()
+      invalidate_stale_cache!(pkg_id)
+    end
     # Ensure .ji exists so the parent's compilecache subprocess can find it,
     # but don't load the module — _require_from_serialized will load deps
-    # as part of the parent's dependency chain, avoiding duplicate loads
-    if !Base.generating_output() && !isdir(Base.compilecache_dir(pkg_id))
+    # as part of the parent's dependency chain, avoiding duplicate loads.
+    # Recompile when either the cache dir is missing entirely OR every .ji
+    # in it was just swept by `invalidate_stale_cache!`.
+    if !Base.generating_output() && !has_valid_ji(pkg_id)
       try
         ensure_compiled!(dep_path; visited)
       catch
@@ -874,6 +943,10 @@ function load_from_cache(path::String, name::String)
     push!(dep_dirs, pkg_dir)
   end
 
+  # Sweep our own stale .ji too — mirrors the transitive sweep in
+  # `precompile_deps!` for the top-level path.
+  invalidate_stale_cache!(pkg_id)
+
   # Check for existing compiled cache
   cache_dir = Base.compilecache_dir(pkg_id)
   if isdir(cache_dir)
@@ -931,6 +1004,27 @@ function load_from_cache(path::String, name::String)
 end
 
 """
+Return `true` when any transitive @use-file dep of `path` has already
+been loaded via include-fallback (see `fallback_paths`). When a dep
+lives in the fallback set, loading the parent from a cache would bind
+it to the precompiled copy of that dep — a different `Module` object
+with different struct identities than what sibling callers see.
+Coordinating a matching fallback keeps every file's `@use` chain
+anchored to the same set of types.
+"""
+function has_fallback_dep(path::String; visited::Set{String}=Set{String}())
+  path in visited && return false
+  push!(visited, path)
+  path in fallback_paths && return true
+  source = try read(path, String) catch; return false end
+  base = dirname(path)
+  for (dep_path, _) in find_use_deps(source, base)
+    has_fallback_dep(dep_path; visited) && return true
+  end
+  false
+end
+
+"""
 Load a module with stable identity — paths are normalized via `realpath` so
 repeated calls to the same file always return the exact same Module (`===`).
 """
@@ -938,14 +1032,22 @@ function load_module(path)
   path = realpath(path)
   name = pkgname(path)
   haskey(modules, path) && return modules[path]
-  mod = try
-    load_from_cache(path, name)
-  catch e
-    # Inside a compilecache subprocess, don't fall back to get_module+include
-    # because creating anonymous modules breaks incremental compilation
-    Base.generating_output() && rethrow()
-    @warn "Cache compilation failed for $path, falling back to include" exception=e
+  # If any transitive @use-dep was include-fallback-loaded, a successful
+  # cache load here would fork module identity with the rest of the graph.
+  # Skip straight to include-fallback so everything shares types.
+  skip_cache = !Base.generating_output() && has_fallback_dep(path)
+  mod = if skip_cache
     nothing
+  else
+    try
+      load_from_cache(path, name)
+    catch e
+      # Inside a compilecache subprocess, don't fall back to get_module+include
+      # because creating anonymous modules breaks incremental compilation
+      Base.generating_output() && rethrow()
+      @warn "Cache compilation failed for $path, falling back to include" exception=e
+      nothing
+    end
   end
   if isnothing(mod)
     # Inside a compilecache subprocess, we can't fall back to get_module+include
@@ -956,6 +1058,7 @@ function load_module(path)
     Base.invokelatest() do
       isdefined(mod, :__init__) && mod.__init__()
     end
+    push!(fallback_paths, path)
   end
   modules[path] = mod
   Base.register_root_module(mod)
