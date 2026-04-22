@@ -344,8 +344,11 @@ function find_use_deps(source::String, base::String)
   use_prefix = nothing  # tracks prefix from @use "prefix" [ ... ] blocks
   for line in split(source, "\n")
     line = strip(line)
-    # Track @use "prefix" [ bracket blocks
-    bm = match(r"^@use\s+\"([^\"]+)\"\s*\[", line)
+    # Track @use "prefix" [ bracket blocks that span multiple lines. The
+    # `\s*$` anchor is load-bearing: without it a single-line form like
+    # `@use "pkg" ["sub" X] Y` would falsely set use_prefix and skip the
+    # line entirely, losing both the main dep and the bracketed subdep.
+    bm = match(r"^@use\s+\"([^\"]+)\"\s*\[\s*$", line)
     if !isnothing(bm)
       use_prefix = bm[1]
       continue
