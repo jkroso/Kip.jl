@@ -146,10 +146,25 @@ function complete(path::AbstractString, pkgname::AbstractString=pkgname(path))
   error("$path can not be completed to a file")
 end
 
+struct FrozenRepo
+  path::String
+end
+LibGit2.path(r::FrozenRepo) = r.path
+
 function head_name(repo::LibGit2.GitRepo)
   cd(LibGit2.path(repo)) do
     rstrip(read(git(["rev-parse", "--short", "HEAD"]), String))
   end
+end
+
+function checkout_repo(repo::FrozenRepo, username, reponame, tag)
+  # Find the most recent snapshot — all versions are already cached
+  snap_dir = joinpath(refs, username, reponame)
+  if isdir(snap_dir)
+    entries = readdir(snap_dir, join=true)
+    isempty(entries) || return first(entries)
+  end
+  repo.path
 end
 
 function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
@@ -226,7 +241,10 @@ function require(path::AbstractString, base::AbstractString)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
         Pkg.activate(base) do
-          if is_installed(base, pkgname)
+          if repo isa FrozenRepo
+            # Compilation mode: skip Git operations, package is already installed
+            is_installed(base, pkgname) || error("$pkgname not installed; can't install in frozen/compilation mode")
+          elseif is_installed(base, pkgname)
             update_pkg(repo, tag)
           else
             add_pkg(repo, tag)
@@ -272,7 +290,11 @@ end
 function getrepo(user, repo)
   localpath = joinpath(repos, user, repo)
   if isdir(localpath)
-    LibGit2.GitRepo(localpath)
+    try
+      LibGit2.GitRepo(localpath)
+    catch
+      FrozenRepo(localpath)
+    end
   else
     LibGit2.clone("https://github.com/$user/$repo.git", localpath)
   end
@@ -1038,7 +1060,8 @@ function load_module(path)
   # If any transitive @use-dep was include-fallback-loaded, a successful
   # cache load here would fork module identity with the rest of the graph.
   # Skip straight to include-fallback so everything shares types.
-  skip_cache = !Base.generating_output() && has_fallback_dep(path)
+  frozen = haskey(ENV, "KIP_FROZEN")
+  skip_cache = (!Base.generating_output() && has_fallback_dep(path)) || frozen
   mod = if skip_cache
     nothing
   else
@@ -1047,7 +1070,7 @@ function load_module(path)
     catch e
       # Inside a compilecache subprocess, don't fall back to get_module+include
       # because creating anonymous modules breaks incremental compilation
-      Base.generating_output() && rethrow()
+      !frozen && Base.generating_output() && rethrow()
       @warn "Cache compilation failed for $path, falling back to include" exception=e
       nothing
     end
@@ -1055,7 +1078,7 @@ function load_module(path)
   if isnothing(mod)
     # Inside a compilecache subprocess, we can't fall back to get_module+include
     # because creating anonymous modules via eval breaks incremental compilation
-    Base.generating_output() && error("Cannot precompile $path: cache compilation failed or was skipped")
+    !frozen && Base.generating_output() && error("Cannot precompile $path: cache compilation failed or was skipped")
     mod = get_module(path, name)
     Base.include(mod, path)
     Base.invokelatest() do
