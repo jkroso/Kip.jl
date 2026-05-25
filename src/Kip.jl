@@ -17,13 +17,15 @@ __init__() = begin
   global repos = joinpath(home, "repos")
   global refs = joinpath(home, "refs")
   global cache = joinpath(home, "cache")
-  global stdlib = Set(readdir(Sys.STDLIB))
+  global stdlib = isdir(Sys.STDLIB) ? Set(readdir(Sys.STDLIB)) : Set{String}()
   global stdlib_uuids = Dict{String,String}()
-  for d in readdir(Sys.STDLIB)
-    proj = joinpath(Sys.STDLIB, d, "Project.toml")
-    if isfile(proj)
-      p = TOML.parsefile(proj)
-      haskey(p, "name") && haskey(p, "uuid") && (stdlib_uuids[p["name"]] = p["uuid"])
+  if isdir(Sys.STDLIB)
+    for d in readdir(Sys.STDLIB)
+      proj = joinpath(Sys.STDLIB, d, "Project.toml")
+      if isfile(proj)
+        p = TOML.parsefile(proj)
+        haskey(p, "name") && haskey(p, "uuid") && (stdlib_uuids[p["name"]] = p["uuid"])
+      end
     end
   end
 end
