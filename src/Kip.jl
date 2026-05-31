@@ -946,6 +946,12 @@ function load_from_cache(path::String, name::String)
     return Base.loaded_modules[pkg_id]
   end
 
+  # A previous load already determined this module opts out of precompilation
+  # (e.g. __precompile__(false), or it evals into a closed module). The marker is
+  # keyed by source hash, so editing the file invalidates it automatically. Skip
+  # the doomed compilecache subprocess and signal include-fallback (return nothing).
+  isfile(nocompile_marker) && return nothing
+
   # Ensure initial_pwd is on LOAD_PATH — this is where @use PkgName installs
   # packages, and the compilecache subprocess needs to locate them there
   if initial_pwd ∉ LOAD_PATH
@@ -1000,10 +1006,21 @@ function load_from_cache(path::String, name::String)
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   stderr_buf = IOBuffer()
   try
-    ji_path, ocache_path = Base.compilecache(pkg_id, src_path, stderr_buf)
+    result = Base.compilecache(pkg_id, src_path, stderr_buf)
     # Print any non-error stderr output (warnings, etc.)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
+    # compilecache *returns* a PrecompilableError (rather than throwing) when the
+    # precompile subprocess exits 125 — the module opts out via __precompile__(false)
+    # or pulls in a non-precompilable dep. Record it so later loads skip straight to
+    # include-fallback, and signal that fallback now (return nothing) instead of
+    # destructuring the error into (ji_path, ocache_path).
+    if result isa Core.PrecompilableError
+      mkpath(dirname(nocompile_marker))
+      write(nocompile_marker, sprint(showerror, result))
+      return nothing
+    end
+    ji_path, ocache_path = result
     return Base._require_from_serialized(pkg_id, ji_path, ocache_path, src_path)
   catch e
     # Only mark as non-precompilable for errors that indicate the module
@@ -1011,7 +1028,11 @@ function load_from_cache(path::String, name::String)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
     err_str = try sprint(showerror, e) catch; string(e) end * "\n" * stderr_output
-    if occursin("Evaluation into", err_str) || occursin("overwritten in", err_str) || occursin("Method overwriting", err_str)
+    # Structural opt-outs that make the module fundamentally non-precompilable.
+    # "breaks incremental compilation" is Julia 1.12's wording for evaluating into
+    # / creating globals in a closed module; the older phrasings are kept for
+    # compatibility. Recording the marker lets later loads skip the doomed compile.
+    if occursin("breaks incremental compilation", err_str) || occursin("Evaluation into", err_str) || occursin("overwritten in", err_str) || occursin("Method overwriting", err_str)
       mkpath(dirname(nocompile_marker))
       write(nocompile_marker, err_str)
     end

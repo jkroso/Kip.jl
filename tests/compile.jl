@@ -1,4 +1,5 @@
 using Test
+using Logging
 # Load Kip from the project source
 pushfirst!(LOAD_PATH, joinpath(@__DIR__, ".."))
 using Kip
@@ -146,6 +147,30 @@ end
     val2 = mod2.computed_at_load
     # Each load should produce a new random value (not cached)
     @test val1 != val2
+  end
+
+  @testset "opting out of precompilation does not emit a cache-failure warning" begin
+    # compilecache *returns* a Core.PrecompilableError (rather than throwing) when
+    # the precompile subprocess exits 125 for a module that opts out. Kip must
+    # recognise that return value and fall back to include quietly — not crash
+    # destructuring it into (ji_path, ocache_path), which surfaces a confusing
+    # "Cache compilation failed ... MethodError: iterate(::Core.PrecompilableError)".
+    path = realpath(joinpath(fixtures, "no_precompile.jl"))
+    delete!(Kip.modules, path)
+    # Clear any marker from earlier runs so this exercises the first-load path too.
+    hash = Kip.source_hash(read(path, String))
+    rm(joinpath(Kip.cache, hash, ".noprecompile"), force=true)
+    logger = Test.TestLogger(min_level=Logging.Debug)
+    mod = Logging.with_logger(logger) do
+      Kip.load_module(path)
+    end
+    @test mod isa Module
+    @test isdefined(mod, :computed_at_load)
+    # Render each record fully (message + kwargs) — the exception detail rides in
+    # the `exception=` kwarg, not the message.
+    records = [string(r.message) * " " * string(r.kwargs) for r in logger.logs]
+    @test !any(r -> occursin("Cache compilation failed", r), records)
+    @test !any(r -> occursin("iterate(::Core.PrecompilableError)", r), records)
   end
 end
 
