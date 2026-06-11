@@ -160,11 +160,13 @@ function head_name(repo::LibGit2.GitRepo)
 end
 
 function checkout_repo(repo::FrozenRepo, username, reponame, tag)
-  # Find the most recent snapshot — all versions are already cached
+  # Find the most recent snapshot — all versions are already cached.
+  # readdir order is alphabetical (commit hashes, i.e. arbitrary), so pick
+  # by mtime or a stale snapshot can shadow the latest one.
   snap_dir = joinpath(refs, username, reponame)
   if isdir(snap_dir)
-    entries = readdir(snap_dir, join=true)
-    isempty(entries) || return first(entries)
+    entries = filter(isdir, readdir(snap_dir, join=true))
+    isempty(entries) || return argmax(mtime, entries)
   end
   repo.path
 end
