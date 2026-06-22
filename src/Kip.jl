@@ -217,6 +217,24 @@ function entry_path()
   isempty(ARGS) ? pwd() : dirname(joinpath(pwd(), ARGS[end]))
 end
 
+"""
+The name of the package `path` belongs to. Used to namespace a module so two
+files that share a basename across *different* packages don't collide as root
+modules — e.g. jkroso/LLM.jl's `providers/xai.jl` and a local
+`scan/parsers/xai.jl` would both otherwise be `⭒xai`.
+
+A cached GitHub dependency lives at
+`~/.kip/refs/<user>/<Repo>.jl/<40-hex-commit>/<subpath>`, so its package is the
+directory just above the commit-hash dir (with the `.jl` extension dropped). A
+local file has no such marker, so fall back to the entry-point directory's name.
+"""
+function owner_name(path::AbstractString)
+  parts = splitpath(path)
+  i = findfirst(p -> occursin(r"^[0-9a-f]{40}$", p), parts)
+  i !== nothing && i > 1 && return first(splitext(parts[i - 1]))
+  basename(entry_path())
+end
+
 "Require `path` relative to the current module"
 function require(path::AbstractString)
   require(path, source_dir())
@@ -318,8 +336,17 @@ eval_module(path) = Base.include(get_module(path), path)
 
 function get_module(path, name=pkgname(path); interactive=false)
   get!(modules, path) do
-    # prefix with a ⭒ to avoid clashing with variables inside the module
-    mod = Module(Symbol(:⭒, name))
+    # Name the wrapper so it can't clash with a binding inside the module (a ⭒
+    # prefix or a / separator — neither is a legal identifier char) and so two
+    # same-basename files from different packages get distinct names: `main.jl`
+    # keeps the bare `⭒<pkg>` form, everything else is `<owner-initial>/<base>`.
+    sym = if basename(path) == "main.jl"
+      Symbol(:⭒, name)
+    else
+      owner = owner_name(path)
+      Symbol(isempty(owner) ? '⭒' : first(owner), '/', first(splitext(basename(path))))
+    end
+    mod = Module(sym)
     Core.eval(mod, Expr(:toplevel,
                         :(using Kip),
                         interactive ? :(using InteractiveUtils) : nothing,
@@ -1221,7 +1248,7 @@ macro use(first, rest...)
     mn = nameof(m)
     append!(names, filter(Base.names(m)) do name
       name == mn && return false
-      !occursin(r"^(?:[#⭒]|eval|include$)", String(name))
+      !occursin(r"^(?:[#⭒]|eval|include$)|/", String(name))
     end)
   end
   exprs = []
@@ -1236,7 +1263,7 @@ macro use(first, rest...)
         append!(names, filter(n -> n != mn, Base.names(m)))
       else
         for n in Base.names(getfield(m, splat), all=true)
-          n == splat || occursin(r"^(?:[#⭒]|eval$)", String(n)) && continue
+          n == splat || occursin(r"^(?:[#⭒]|eval$)|/", String(n)) && continue
           push!(exprs, :(const $(esc(n)) = getfield(getfield($name, $(QuoteNode(splat))), $(QuoteNode(n)))))
         end
       end
