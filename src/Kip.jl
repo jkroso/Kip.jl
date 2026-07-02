@@ -1080,19 +1080,124 @@ function load_from_cache(path::String, name::String)
   end
 end
 
+# Functions whose first argument gets mutated. A top-level call to one of these
+# on an @use-imported binding is a cross-module side effect (see below).
+const MUTATOR_FNS = Set([:push!, :pushfirst!, :append!, :prepend!, :insert!, :splice!,
+  :delete!, :deleteat!, :pop!, :popfirst!, :empty!, :setindex!, :merge!, :mergewith!,
+  :setfield!, :setproperty!, :copyto!, :fill!, :resize!, :union!, :intersect!, :setdiff!])
+
+# The root symbol a mutation lands on: `X[] = f` and `X.seams.a = f` both root at `X`.
+_base_symbol(ex) = ex isa Symbol ? ex :
+  (ex isa Expr && ex.head in (:., :ref, :curly) && !isempty(ex.args)) ? _base_symbol(ex.args[1]) :
+  nothing
+
+# Every Symbol that an @use macrocall's argument list could bind into the module.
+# Overcollection is deliberate — the cost of a false positive is only that the
+# file loads by include (always-correct semantics), never a wrong load.
+function _collect_use_names!(names::Set{Symbol}, ex)
+  if ex isa Symbol
+    push!(names, ex)
+  elseif ex isa Expr && ex.head != :...   # a splat (`exports...`) binds unknowable names
+    for a in ex.args
+      a isa AbstractString && continue
+      _collect_use_names!(names, a)
+    end
+  end
+  names
+end
+
+# Statement blocks whose contents still execute at module top level.
+const _TOPLEVEL_BLOCKS = Set([:toplevel, :block, :if, :elseif, :for, :while, :let, :try])
+
 """
-Return `true` when any transitive @use-file dep of `path` has already
-been loaded via include-fallback (see `fallback_paths`). When a dep
-lives in the fallback set, loading the parent from a cache would bind
-it to the precompiled copy of that dep — a different `Module` object
-with different struct identities than what sibling callers see.
-Coordinating a matching fallback keeps every file's `@use` chain
-anchored to the same set of types.
+Find a top-level statement in `path` that mutates state owned by ANOTHER module
+(a binding imported via `@use`) — e.g. filling a seam: `PARTY_MERGE[] = handler`,
+`HANDLERS["x"] = f`, `push!(REGISTRY, r)`. Returns a short description, or
+`nothing` when the file has no such statement.
+
+Why it matters: those mutations run during a precompile subprocess but are NOT
+serialized into the `.ji` — Julia caches the compiled module's own state, not
+its writes to other packages' globals. A file like this loads "successfully"
+from a cache with every seam it filled silently unset. The only correct load
+for it (short of moving the mutations into `__init__`) is include, every time.
+
+Memoized per path for the life of the process (files are assumed stable within
+a session, same as the `modules` registry).
+"""
+function toplevel_foreign_mutation(path::String)
+  get!(_foreign_mut_cache, path) do
+    source = try read(path, String) catch; return nothing end
+    ast = try Meta.parseall(source; filename=path) catch; return nothing end
+    ast isa Expr || return nothing
+    imported = Set{Symbol}()
+    _scan_use!(imported, ast)
+    isempty(imported) && return nothing
+    _find_foreign_mutation(ast, imported)
+  end
+end
+const _foreign_mut_cache = Dict{String,Union{Nothing,String}}()
+
+_scan_use!(imported, ex) = begin
+  ex isa Expr || return
+  if ex.head == :macrocall && !isempty(ex.args) && ex.args[1] == Symbol("@use")
+    for a in ex.args[2:end]
+      a isa LineNumberNode && continue
+      _collect_use_names!(imported, a)
+    end
+  elseif ex.head in _TOPLEVEL_BLOCKS
+    foreach(a -> _scan_use!(imported, a), ex.args)
+  end
+end
+
+function _find_foreign_mutation(ex, imported; line::Int=0)
+  ex isa Expr || return nothing
+  if ex.head in _TOPLEVEL_BLOCKS
+    for a in ex.args
+      a isa LineNumberNode && (line = a.line; continue)
+      found = _find_foreign_mutation(a, imported; line)
+      found === nothing || return found
+    end
+    return nothing
+  end
+  if ex.head in (:(=), Symbol(".=")) && ex.args[1] isa Expr && ex.args[1].head in (:ref, :.)
+    b = _base_symbol(ex.args[1])
+    b in imported && return "$(b) is assigned into at top level (line $(line))"
+  end
+  if ex.head == :call && length(ex.args) >= 2
+    callee = ex.args[1] isa Expr && ex.args[1].head == :. ? _last_symbol(ex.args[1]) : ex.args[1]
+    if callee in MUTATOR_FNS
+      b = _base_symbol(ex.args[2])
+      b in imported && return "$(callee)($(b), …) mutates it at top level (line $(line))"
+    end
+  end
+  nothing
+end
+
+_last_symbol(ex) = ex isa Symbol ? ex :
+  ex isa QuoteNode ? _last_symbol(ex.value) :
+  ex isa Expr && !isempty(ex.args) ? _last_symbol(ex.args[end]) : nothing
+
+"""
+Return `true` when `path` — or any transitive @use-file dep — must be loaded by
+include rather than from a compile cache, either because it already WAS
+include-fallback-loaded (see `fallback_paths`), or because its top level
+mutates another module's state (`toplevel_foreign_mutation`; those writes are
+discarded by cache loads, so a cache is never a faithful copy of it). When a
+dep lives in that set, loading the parent from a cache would bind it to the
+precompiled copy of that dep — a different `Module` object with different
+struct identities (or silently-unset seams) than what sibling callers see.
+Coordinating a matching fallback keeps every file's `@use` chain anchored to
+the same set of types and the same effect-carrying module instances.
 """
 function has_fallback_dep(path::String; visited::Set{String}=Set{String}())
   path in visited && return false
   push!(visited, path)
   path in fallback_paths && return true
+  mut = toplevel_foreign_mutation(path)
+  if mut !== nothing
+    @debug "loading $path by include: $mut — cross-module writes don't survive precompilation (move them into __init__() to make this file cacheable)"
+    return true
+  end
   source = try read(path, String) catch; return false end
   base = dirname(path)
   for (dep_path, _) in find_use_deps(source, base)

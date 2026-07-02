@@ -334,3 +334,53 @@ end
   @test occursin("CACHED middle:true", out)
   @test occursin("CACHED leaf:true", out)
 end
+
+@testset "toplevel_foreign_mutation detection" begin
+  detect(src) = begin
+    p = tempname() * ".jl"
+    write(p, src)
+    r = Kip.toplevel_foreign_mutation(p)
+    rm(p, force=true)
+    r
+  end
+  # the seam-fill forms a cache load would silently discard
+  @test detect("@use \"./c\" SEAM\nSEAM[] = f") !== nothing
+  @test detect("@use \"./c\" HANDLERS\nHANDLERS[\"x\"] = f") !== nothing
+  @test detect("@use \"./c\" LIST\npush!(LIST, 1)") !== nothing
+  @test detect("@use \"./c\" => C\nC.SEAM[] = f") !== nothing
+  @test detect("@use \"./c\" S\nif ok\n  S[] = f\nend") !== nothing
+  @test detect("@use \"./c\" CONF\nmerge!(CONF, other)") !== nothing
+  # safe: the module's OWN state persists in its cache
+  @test detect("const SEAM = Ref{Function}()\nSEAM[] = () -> 1") === nothing
+  # safe: mutation inside a function runs at call time, not load time
+  @test detect("@use \"./c\" S\nsetup() = (S[] = f)") === nothing
+  # safe: no imports at all
+  @test detect("const X = Dict()\nX[\"a\"] = 1") === nothing
+end
+
+@testset "cross-module seam fills survive cache round-trips" begin
+  # seam_filler.jl fills a Ref owned by seam_lib.jl at top level. If it (or an
+  # importer) ever loads from a .ji, the fill is discarded and the seam is
+  # silently unset — so Kip must route the whole chain through include, in
+  # every process, warm cache or cold.
+  kip_root = dirname(@__DIR__)
+  julia = joinpath(Sys.BINDIR, Base.julia_exename())
+  script = """
+  pushfirst!(LOAD_PATH, $(repr(kip_root)))
+  using Kip
+  mod = Kip.load_module(realpath(joinpath($(repr(fixtures)), "seam_user.jl")))
+  println("SEAM: ", Base.invokelatest(mod.seam_value))
+  """
+  for run in 1:2   # run 2 exercises whatever caches run 1 left behind
+    out = read(Cmd(`$julia --startup-file=no --project=$kip_root -e $script`), String)
+    @test occursin("SEAM: 42", out)
+  end
+  # and neither the filler nor its importer ever got a .ji
+  for f in ("seam_filler.jl", "seam_user.jl")
+    p = realpath(joinpath(fixtures, f))
+    hash = Kip.source_hash(read(p, String))
+    name = Kip.valid_identifier(replace(Kip.pkgname(p), r"[^\w]" => "_") * "_" * hash[1:3])
+    cdir = Base.compilecache_dir(Base.PkgId(Kip.deterministic_uuid(hash), name))
+    @test !isdir(cdir) || !any(endswith(".ji"), readdir(cdir))
+  end
+end
