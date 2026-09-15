@@ -976,7 +976,7 @@ function load_from_cache(path::String, name::String)
   end
 
   # A previous load already determined this module opts out of precompilation
-  # (e.g. __precompile__(false), or it evals into a closed module). The marker is
+  # (e.g. a precompile opt-out, or it evals into a closed module). The marker is
   # keyed by source hash, so editing the file invalidates it automatically. Skip
   # the doomed compilecache subprocess and signal include-fallback (return nothing).
   isfile(nocompile_marker) && return nothing
@@ -1040,7 +1040,7 @@ function load_from_cache(path::String, name::String)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
     # compilecache *returns* a PrecompilableError (rather than throwing) when the
-    # precompile subprocess exits 125 — the module opts out via __precompile__(false)
+    # precompile subprocess exits 125 — the module opted out of precompilation
     # or pulls in a non-precompilable dep. Record it so later loads skip straight to
     # include-fallback, and signal that fallback now (return nothing) instead of
     # destructuring the error into (ji_path, ocache_path).

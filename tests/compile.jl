@@ -174,6 +174,14 @@ end
   end
 end
 
+@testset "Kip source is not mistaken for a precompile opt-out" begin
+  # Julia 1.13+ scans the package's main source with this regex and, on a match,
+  # skips writing a cache and logs Info on every `using Kip`. Comments count —
+  # the heuristic is a raw text search, not a parse.
+  src = read(joinpath(@__DIR__, "..", "src", "Kip.jl"), String)
+  @test !occursin(r"\b__precompile__\(\s*false\s*\)", src)
+end
+
 @testset "__init__() in user modules" begin
   @testset "__init__ is called when module is loaded" begin
     path = realpath(joinpath(fixtures, "has_init.jl"))
