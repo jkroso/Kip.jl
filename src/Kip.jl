@@ -3,11 +3,25 @@ __precompile__(true)
 module Kip # start of module
 using ProgressMeter
 using MacroTools
-using Git
 import LibGit2
 import TOML
 import SHA
-import Pkg
+
+# Pkg and Git only load when Kip has to fetch or install something
+const pkg_id = Base.PkgId(Base.UUID("44cfe95a-1eb2-52ea-b672-e2afdf69b78f"), "Pkg")
+const git_id = Base.PkgId(Base.UUID("d7ba0133-e1db-5d97-8f8c-041e4b3a1eb2"), "Git")
+load_pkg() = Base.require(pkg_id)
+git(args...) = Base.invokelatest(Base.require(git_id).git, args...)
+"Run `f` with `base` as the active project"
+with_project(f, base) = begin
+  old = Base.ACTIVE_PROJECT[]
+  try
+    Base.ACTIVE_PROJECT[] = base
+    f()
+  finally
+    Base.ACTIVE_PROJECT[] = old
+  end
+end
 
 include("./deps.jl")
 
@@ -262,7 +276,9 @@ function require(path::AbstractString, base::AbstractString)
     repo = getrepo(username, reponame)
     if is_pkg3_pkg(LibGit2.path(repo))
       get!(modules, path) do
-        Pkg.activate(base) do
+        # A frozen build only loads what's already installed, so it doesn't need Pkg
+        activate = repo isa FrozenRepo ? with_project : (f, b) -> Base.invokelatest(load_pkg().activate, f, b)
+        activate(base) do
           if repo isa FrozenRepo
             # Compilation mode: skip Git operations, package is already installed
             is_installed(base, pkgname) || error("$pkgname not installed; can't install in frozen/compilation mode")
@@ -296,7 +312,8 @@ end
 function add_pkg(repo, tag)
   remote = LibGit2.get(LibGit2.GitRemote, repo, LibGit2.remotes(repo)[1])
   url = String(split(string(remote), ' ')[end])
-  Pkg.add(Pkg.PackageSpec(url=url, rev=isnothing(tag) ? "master" : tag))
+  P = load_pkg()
+  Base.invokelatest(P.add, Base.invokelatest(P.PackageSpec; url=url, rev=isnothing(tag) ? "master" : tag))
 end
 
 function update_pkg(repo, tag)
@@ -648,7 +665,7 @@ function ensure_pkg_deps_loaded!(path::String)
       haskey(Base.loaded_modules, pkg_id) && continue
       # Install if needed
       if isnothing(Base.locate_package(pkg_id))
-        try Pkg.add(pkg) catch; end
+        try Base.invokelatest(load_pkg().add, pkg) catch; end
       end
       # Load into parent so compilecache passes it as concrete_deps
       try Base.require(pkg_id) catch; end
@@ -683,7 +700,7 @@ function registry_uuid(name::String)
   !isnothing(uuid) && return uuid
   # Fall back to Pkg.Registry for compressed registries (read-only, no side effects)
   try
-    Reg = Pkg.Registry
+    Reg = load_pkg().Registry
     for reg in Base.invokelatest(Reg.reachable_registries)
       for uuid in Base.invokelatest(Reg.uuids_from_name, reg, name)
         result = string(uuid)
@@ -1318,7 +1335,7 @@ macro use(first, rest...)
         let old = Base.ACTIVE_PROJECT[]
           try
             Base.ACTIVE_PROJECT[] = Kip.initial_pwd
-            Pkg.add($(string(pkg)))
+            Base.invokelatest(Kip.load_pkg().add, $(string(pkg)))
           finally
             Base.ACTIVE_PROJECT[] = old
           end
