@@ -12,6 +12,16 @@ const loaded = Module[]
 # (file the @use is in, path written in the @use) => index into `loaded`, or the
 # PkgId of a GitHub repo that is a normal Julia package
 const table = Dict{Tuple{String,String},Union{Int,Base.PkgId}}()
+# The same, by path alone, for the paths that mean the same in any file: GitHub
+# repos and absolute paths. Code evaluated at a REPL has no file of its own.
+const anywhere = Dict{String,Union{Int,Base.PkgId}}()
+
+"Record that `@use \"path\"` in `file` loads `v`"
+function resolved!(file::String, path::String, v)
+  table[(file, path)] = v
+  occursin(r"^\.{1,2}", path) || (anywhere[path] = v)
+  v
+end
 
 # The same names as Kip's, for code written against Kip. `modules` maps each
 # bundled file to its module. `fallback_paths` is empty: Kip uses it to find
@@ -42,7 +52,14 @@ start_through(i::Int) =
 
 function lookup(file::String, path::String)
   v = get(table, (file, path), nothing)
-  v === nothing && error("This bundle has no module for `@use \"$path\"` in $file")
+  # The bundle knows each file by its real path, but a program can include a file through a link
+  v === nothing && isfile(file) && (v = get(table, (realpath(file), path), nothing))
+  v === nothing && (v = get(anywhere, path, nothing))
+  if v === nothing
+    isfile(file) || error("This bundle has no module for `@use \"$path\"`. It only has the files it was built with.")
+    error("""This bundle has no module for `@use "$path"` in $file. \
+             If the program includes $file itself, name it in `includes` when you bundle it.""")
+  end
   v isa Base.PkgId && return Base.require(v)
   building_image() && start_through(v)
   loaded[v]

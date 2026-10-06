@@ -4,7 +4,7 @@
 #
 
 """
-    bundle(entry, dir; project, name, precompile=true) -> String
+    bundle(entry, dir; project, name, includes=[], precompile=true) -> String
 
 Write the script `entry` and every Kip file it `@use`s, directly or through
 other files, into `dir`. Returns the path of `dir/bundle.jl`.
@@ -30,16 +30,21 @@ Keywords:
   the files use. By default it is the project Kip installs packages into.
 - `name`: the package name of the bundle. By default it comes from `entry`,
   e.g. `app.jl` gives `AppBundle`.
+- `includes`: files, or folders of `.jl` files, that the program loads itself
+  with `include` while it runs, such as plugins. These files stay where they
+  are, but the bundle holds every file they `@use`.
 """
 function bundle(entry::AbstractString, dir::AbstractString;
                 project::AbstractString=default_project(),
                 name::AbstractString=bundle_name(entry),
+                includes=String[],
                 precompile::Bool=true)
   entry = realpath(first(complete(entry)))
-  files, table = bundle_graph(entry)
-  pkgs = bundle_packages(files, table, project)
+  extra = included_files(includes)
+  deps, table = bundle_graph(entry, extra)
+  pkgs = bundle_packages([deps..., entry, extra...], table, project)
   mkpath(dir)
-  write(joinpath(dir, "bundle.jl"), bundle_source(entry, files[1:end-1], table, name, precompile))
+  write(joinpath(dir, "bundle.jl"), bundle_source(entry, deps, table, name, precompile))
   write(joinpath(dir, "juliac.jl"), """
     # JuliaC compiles this file into an app. It loads the bundle, a package with
     # a compile cache, and runs the entry script, which defines `main`.
@@ -62,18 +67,34 @@ function bundle_name(entry::AbstractString)
   isempty(name) || isdigit(first(name)) ? "Bundle" * name : name * "Bundle"
 end
 
+"The files `includes` names: each file, and the `.jl` files in each folder"
+included_files(includes) =
+  map(realpath, mapreduce(vcat, includes; init=String[]) do p
+    isdir(p) ? filter(endswith(".jl"), readdir(p, join=true)) :
+    isfile(p) ? [p] :
+    error("Kip.bundle: $p in `includes` isn't a file or a folder")
+  end)
+
 """
-Every Kip file `entry` depends on, in load order with `entry` last, and where
-each `@use` path in each file leads: to a file, or to the PkgId of a GitHub
-repo that is a normal Julia package.
+Every Kip file that `entry` and the files in `extra` depend on, in load order,
+and where each `@use` path in each of those files leads: to a file, or to the
+PkgId of a GitHub repo that is a normal Julia package. Neither `entry` nor the
+files in `extra` are among the files returned, unless another file @uses them.
 """
-function bundle_graph(entry::String)
+function bundle_graph(entry::String, extra::Vector{String}=String[])
   order = String[]
   table = Dict{Tuple{String,String},Union{String,Base.PkgId}}()
   state = Dict{String,Symbol}()
-  function visit(file)
+  # Files in `extra` the program includes itself, so the bundle doesn't hold them
+  unbundled = Set{String}()
+  function visit(file; bundled=true)
     s = get(state, file, nothing)
-    s === :done && return
+    if s === :done
+      bundled && file == entry && error("Kip.bundle: a file @uses $entry, the script being bundled")
+      # A file in `extra` that a bundled file @uses must be bundled after all
+      bundled && file in unbundled && (delete!(unbundled, file); push!(order, file))
+      return
+    end
     s === :visiting && error("Kip.bundle: $file @uses itself through other files")
     state[file] = :visiting
     for path in unique(use_paths!(String[], Meta.parseall(read(file, String); filename=file)))
@@ -82,9 +103,10 @@ function bundle_graph(entry::String)
       target isa String && visit(target)
     end
     state[file] = :done
-    push!(order, file)
+    bundled ? push!(order, file) : push!(unbundled, file)
   end
-  visit(entry)
+  visit(entry, bundled=false)
+  foreach(f -> visit(f, bundled=false), extra)
   order, table
 end
 
@@ -158,7 +180,7 @@ end
 
 """
 The registered packages that `files` load, as name => UUID. A package's UUID
-comes from `project`, or else from Julia's standard libraries.
+comes from `project`, or else from where Kip itself would find the package.
 """
 function bundle_packages(files, table, project::AbstractString)
   names = Set{String}()
@@ -214,7 +236,10 @@ function package_uuid(name::String, project::AbstractString)
     entries = get(get(manifest, "deps", manifest), name, nothing)
     entries isa Vector && return entries[1]["uuid"]
   end
-  haskey(stdlib_uuids, name) && return stdlib_uuids[name]
+  # Then where Kip finds it when it loads a file: a standard library, a package
+  # this process has loaded (such as Kip's own MacroTools), or a registry
+  uuid = find_pkg_uuid(name)
+  uuid === nothing || return uuid
   error("""Kip.bundle: the files use the package $name, but $project doesn't have it. \
            Add it to that project, or pass `project` the folder of a project that has it.""")
 end
@@ -263,7 +288,7 @@ function bundle_source(entry::String, deps::Vector{String}, table, name::Abstrac
         "Base.PkgId(Base.UUID($(repr(string(target.uuid)))), $(repr(target.name)))"
     println(io, "    ($(repr(file)), $(repr(path))) => $v,")
   end
-  println(io, "  ]\n  Kip.table[k] = v\nend")
+  println(io, "  ]\n  Kip.resolved!(k..., v)\nend")
   for (file, mod) in zip(deps, module_names(deps, basename(dirname(entry))))
     print(io, """
 

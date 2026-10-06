@@ -106,6 +106,43 @@ run_bundle(file, args...) =
     @test code == 0
   end
 
+  @testset "files the program includes itself" begin
+    host = joinpath(app, "host.jl")
+    plugins = joinpath(app, "plugins")
+    file = Kip.bundle(host, mktempdir(); project, includes=[plugins])
+    out, err, code = run_bundle(file)
+    @test out == "plugin uses c\n"
+    @test code == 0
+    # Without `includes` the bundle can't know what the plugin @uses, and says how to fix that
+    file = Kip.bundle(host, mktempdir(); project)
+    out, err, code = run_bundle(file)
+    @test code == 1
+    @test occursin("name it in `includes`", err)
+  end
+
+  @testset "code with no file, like a REPL, can @use a bundled module by an absolute path" begin
+    c = realpath(joinpath(app, "..", "lib", "c.jl"))
+    entry = joinpath(mktempdir(), "abs.jl")
+    write(entry, "@use $(repr(c)) cname\nprintln(cname())\n")
+    dir = dirname(Kip.bundle(entry, mktempdir(); project))
+    repl = """
+      using AbsBundle
+      m = Module()
+      Core.eval(m, :(const Kip = \$(AbsBundle.Kip)))
+      Core.eval(m, :(using .Kip))
+      println(Base.include_string(m, $(repr("@use $(repr(c)) cname; cname()"))))
+      try
+        Base.include_string(m, $(repr("@use \"./elsewhere\" x")))
+      catch e
+        println(sprint(showerror, e))
+      end
+      """
+    out, _, code = run_julia(`$julia --startup-file=no --project=$dir -e $repl`; env=("JULIA_DEPOT_PATH" => depot * sep,))
+    @test code == 0
+    @test startswith(out, "c\n")
+    @test occursin("It only has the files it was built with", out)
+  end
+
   @testset "a package the project doesn't have" begin
     @test_throws ErrorException Kip.bundle(joinpath(app, "missing_pkg.jl"), mktempdir(); project)
   end
