@@ -30,9 +30,15 @@ Keywords:
   the files use. By default it is the project Kip installs packages into.
 - `name`: the package name of the bundle. By default it comes from `entry`,
   e.g. `app.jl` gives `AppBundle`.
-- `includes`: files, or folders of `.jl` files, that the program loads itself
-  with `include` while it runs, such as plugins. These files stay where they
-  are, but the bundle holds every file they `@use`.
+- `includes`: files, or folders of `.jl` files, that the program finds and
+  loads with `include` while it runs, such as plugins. These files stay where
+  they are, but the bundle holds every file they `@use`. An `include` whose
+  path is in the source needs no entry here: the bundler follows it itself.
+
+A module that only included files use waits to start (run its `__init__`)
+until one of them first `@use`s it, as under Kip. This covers files in
+`includes` and files that a function includes. Other modules start when the
+bundle loads.
 """
 function bundle(entry::AbstractString, dir::AbstractString;
                 project::AbstractString=default_project(),
@@ -40,11 +46,10 @@ function bundle(entry::AbstractString, dir::AbstractString;
                 includes=String[],
                 precompile::Bool=true)
   entry = realpath(first(complete(entry)))
-  extra = included_files(includes)
-  deps, table = bundle_graph(entry, extra)
-  pkgs = bundle_packages([deps..., entry, extra...], table, project)
+  deps, lazy, table, unbundled = bundle_graph(entry, included_files(includes))
+  pkgs = bundle_packages([deps; unbundled], table, project)
   mkpath(dir)
-  write(joinpath(dir, "bundle.jl"), bundle_source(entry, deps, table, name, precompile))
+  write(joinpath(dir, "bundle.jl"), bundle_source(entry, deps, lazy, table, name, precompile))
   write(joinpath(dir, "juliac.jl"), """
     # JuliaC compiles this file into an app. It loads the bundle, a package with
     # a compile cache, and runs the entry script, which defines `main`.
@@ -76,10 +81,13 @@ included_files(includes) =
   end)
 
 """
-Every Kip file that `entry` and the files in `extra` depend on, in load order,
-and where each `@use` path in each of those files leads: to a file, or to the
-PkgId of a GitHub repo that is a normal Julia package. Neither `entry` nor the
-files in `extra` are among the files returned, unless another file @uses them.
+Every Kip file that `entry` and the files in `extra` depend on, in load order.
+Then which of those files only the files in `extra` need: their modules wait
+to start until the program first asks for them. Then where each `@use` path in
+each file leads: to a file, or to the PkgId of a GitHub repo that is a normal
+Julia package. Then the files read but not bundled: `entry`, the files in
+`extra`, and the files any of these load with an `include` whose path is in the
+source. The program loads those itself.
 """
 function bundle_graph(entry::String, extra::Vector{String}=String[])
   order = String[]
@@ -97,18 +105,62 @@ function bundle_graph(entry::String, extra::Vector{String}=String[])
     end
     s === :visiting && error("Kip.bundle: $file @uses itself through other files")
     state[file] = :visiting
-    for path in unique(use_paths!(String[], Meta.parseall(read(file, String); filename=file)))
+    ast = Meta.parseall(read(file, String); filename=file)
+    for path in unique(use_paths!(String[], ast))
       target = locate(path, dirname(file))
       table[(file, path)] = target
       target isa String && visit(target)
     end
+    # The file `include`s these into itself, so they stay on disk like `extra`.
+    # A function includes its files when it runs, so those wait like `extra`.
+    now, when_run = include_paths!((String[], String[]), ast, dirname(file))
+    foreach(f -> visit(f, bundled=false), now)
+    append!(later, when_run)
     state[file] = :done
     bundled ? push!(order, file) : push!(unbundled, file)
   end
+  later = String[]
   visit(entry, bundled=false)
-  foreach(f -> visit(f, bundled=false), extra)
-  order, table
+  eager = length(order)
+  append!(later, extra)
+  while !isempty(later)
+    visit(popfirst!(later), bundled=false)
+  end
+  order, Set(order[eager+1:end]), table, collect(unbundled)
 end
+
+"""
+The real path of each file that an `include` call in `ex`, a file in the
+folder `dir`, loads, when the source names the path: a string, or `joinpath`
+of strings and `@__DIR__` or `@dirname`. Returns two lists: the files included
+as the file loads, and the files included inside a function, when it runs.
+Other paths are known only when the program runs, so those files need naming
+in `includes`.
+"""
+function include_paths!(found::Tuple{Vector{String},Vector{String}}, ex, dir::AbstractString, in_function::Bool=false)
+  ex isa Expr && ex.head !== :quote || return found
+  in_function |= is_definition(ex)
+  if ex.head === :call && ex.args[1] === :include && length(ex.args) in (2, 3)
+    p = written_path(ex.args[end], dir)
+    p === nothing || (p = normpath(dir, p); isfile(p) && push!(found[in_function + 1], realpath(p)))
+  end
+  foreach(a -> include_paths!(found, a, dir, in_function), ex.args)
+  found
+end
+
+"A function, closure or macro, whose body runs later, not as its file loads"
+is_definition(ex) =
+  Meta.isexpr(ex, (:function, :macro, :->, :do)) ||
+  (Meta.isexpr(ex, :(=)) && Meta.isexpr(ex.args[1], (:call, :where)))
+
+written_path(ex, dir) =
+  ex isa String ? ex :
+  Meta.isexpr(ex, :macrocall) && ex.args[1] in (Symbol("@__DIR__"), Symbol("@dirname")) ? dir :
+  Meta.isexpr(ex, :call) && ex.args[1] === :joinpath && length(ex.args) > 1 ? begin
+    parts = map(a -> written_path(a, dir), ex.args[2:end])
+    any(isnothing, parts) ? nothing : joinpath(parts...)
+  end :
+  nothing
 
 is_use(ex) = ex === Symbol("@use") || ex == Expr(:., :Kip, QuoteNode(Symbol("@use")))
 ispair(ex) = Meta.isexpr(ex, :call, 3) && ex.args[1] === :(=>)
@@ -263,7 +315,7 @@ end
 
 raw_string(s::AbstractString) = string("raw\"", Base.escape_raw_string(s), "\"")
 
-function bundle_source(entry::String, deps::Vector{String}, table, name::AbstractString, precompile::Bool)
+function bundle_source(entry::String, deps::Vector{String}, lazy::Set{String}, table, name::AbstractString, precompile::Bool)
   index = Dict(f => i for (i, f) in enumerate(deps))
   io = IOBuffer()
   print(io, """
@@ -289,17 +341,13 @@ function bundle_source(entry::String, deps::Vector{String}, table, name::Abstrac
     println(io, "    ($(repr(file)), $(repr(path))) => $v,")
   end
   println(io, "  ]\n  Kip.resolved!(k..., v)\nend")
+  println(io, "\n# Each bundled file: its module's name, its path, its source, and whether it's lazy")
+  println(io, "Kip.bundle[] = @__MODULE__")
   for (file, mod) in zip(deps, module_names(deps, basename(dirname(entry))))
-    print(io, """
-
-      module var"$(Base.escape_raw_string(String(mod)))"
-      import ..Kip
-      using ..Kip: @use, @dirname
-      Kip.load(@__MODULE__, $(raw_string(read(file, String))), $(repr(file)))
-      Kip.register(@__MODULE__, $(repr(file)))
-      end
-      """)
+    println(io, "Kip.add_source!($(repr(mod)), $(repr(file)), ", raw_string(read(file, String)), ", $(file in lazy))")
   end
+  println(io, "\n# Make each file's module, in load order")
+  println(io, "foreach(Kip.define, eachindex(Kip.sources))")
   print(io, """
 
     # The entry script. `run` evaluates it in Main.
@@ -311,6 +359,9 @@ function bundle_source(entry::String, deps::Vector{String}, table, name::Abstrac
 end
 
 const bundle_runner = raw"""
+
+# Runs after every bundled module's own __init__
+__init__() = Kip.restart_lazy()
 
 "Run the entry script in `m`, as if Julia was started with `julia <entry script>`"
 function run(m::Module=Main)

@@ -59,11 +59,14 @@ Some things to know:
 
 - The bundle is a snapshot. If you change a file, make the bundle again.
 - `@__DIR__` and `@dirname` still give the folders the files came from. A bundle that reads data files next to its source needs those files on the machine that runs it.
-- A file that another file loads with `include` isn't in the bundle. The bundle reads it from where it was.
-- If your program loads files itself while it runs, such as plugins, name them with `includes`. The plugins stay where they are, but the bundle holds every file they `@use`:
+- A file that another file loads with `include` isn't in the bundle. The bundle reads it from where it was. When the path is in the source, such as `include("x.jl")` or `include(joinpath(@__DIR__, "x.jl"))`, the bundle also holds every file that file `@use`s.
+- If your program finds the files it includes while it runs, such as plugins in a folder, name them with `includes`. The plugins stay where they are, but the bundle holds every file they `@use`:
 
   ```julia
   Kip.bundle("cli.jl", "build/cli"; includes=["tools", "commands"])
   ```
+
+  A plugin needs no `includes` if the bundle already holds every file it `@use`s.
+- A module that only included files use starts (runs its `__init__`) when one of them first `@use`s it, as it would under Kip. This happens when an `includes` file uses it, or a file that a function includes. Other modules start when the bundle loads.
 - Code evaluated while the bundle runs, such as code typed at a REPL, can `@use` a GitHub repo or an absolute path only if the bundle holds that file.
 - In a bundle, `Kip` is a small stand-in. It has `@use`, `@dirname`, `Kip.modules` and `Kip.fallback_paths`, but not Kip's other functions, such as `Kip.require`.

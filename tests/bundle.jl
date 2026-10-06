@@ -16,6 +16,12 @@ function run_julia(cmd; env=())
   p = run(pipeline(ignorestatus(addenv(cmd, env...)), stdout=out, stderr=err))
   String(take!(out)), String(take!(err)), p.exitcode
 end
+"(module name, path, lazy) for each file in the bundle `file`"
+function bundled(file)
+  pkg = only(ex for ex in Meta.parseall(read(file, String)).args if Meta.isexpr(ex, :module))
+  [(String(eval(ex.args[2])), ex.args[3], ex.args[5]) for ex in pkg.args[3].args
+   if Meta.isexpr(ex, :call) && ex.args[1] == :(Kip.add_source!)]
+end
 run_bundle(file, args...) =
   run_julia(`$julia --startup-file=no $file $args`; env=("JULIA_DEPOT_PATH" => depot * sep,))
 
@@ -75,8 +81,7 @@ run_bundle(file, args...) =
     @test toml["name"] == "AppBundle"
     @test toml["entryfile"] == "bundle.jl"
     @test toml["deps"] == Dict("Dates" => Kip.stdlib_uuids["Dates"])
-    src = read(file, String)
-    mods = [m[1] for m in eachmatch(r"^module var\"([^\"]+)\"$"m, src)]
+    mods = first.(bundled(file))
     @test allunique(mods)
     @test count(m -> endswith(m, "utils") || endswith(m, "utils~2"), mods) == 2
   end
@@ -118,6 +123,44 @@ run_bundle(file, args...) =
     out, err, code = run_bundle(file)
     @test code == 1
     @test occursin("name it in `includes`", err)
+  end
+
+  @testset "a plugin needs no `includes` when the bundle has what it @uses" begin
+    file = Kip.bundle(joinpath(app, "sharedhost.jl"), mktempdir(); project)
+    out, _, code = run_bundle(file)
+    @test out == "plugin uses c\n"
+    @test code == 0
+  end
+
+  @testset "a file included by a path written in the source" begin
+    file = Kip.bundle(joinpath(app, "withinc.jl"), mktempdir(); project)
+    out, _, code = run_bundle(file)
+    @test out == "part uses c\n"
+    @test code == 0
+  end
+
+  @testset "a module only an included file needs starts when first used, as under Kip" begin
+    host = joinpath(app, "lazyhost.jl")
+    file = Kip.bundle(host, mktempdir(); project)
+    @test [basename(p) for (_, p, lazy) in bundled(file) if lazy] == ["noisy.jl"]
+    for args in ([], ["--plugin"])
+      kip_out, _, kip_code = run_julia(`$julia --startup-file=no --project=$kip_root $host $args`)
+      out, _, code = run_bundle(file, args...)
+      @test out == kip_out
+      @test code == kip_code == 0
+    end
+  end
+
+  @testset "a lazy module asked for as the bundle loads starts then" begin
+    entry = joinpath(app, "askearly.jl")
+    file = Kip.bundle(entry, mktempdir(); project)
+    kip_out, _, _ = run_julia(`$julia --startup-file=no --project=$kip_root $entry`)
+    @test kip_out == "noisy started\npart got noisy\n"
+    for run in 1:2 # run 1 asks for it while precompiling, run 2 loads that cache
+      out, _, code = run_bundle(file)
+      @test out == kip_out
+      @test code == 0
+    end
   end
 
   @testset "code with no file, like a REPL, can @use a bundled module by an absolute path" begin

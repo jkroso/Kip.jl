@@ -7,10 +7,15 @@ module Kip
 # as Kip's own `@use` macro.
 export @use, @dirname
 
-# loaded[i] is the module of the i-th bundled file, in load order
-const loaded = Module[]
-# (file the @use is in, path written in the @use) => index into `loaded`, or the
-# PkgId of a GitHub repo that is a normal Julia package
+# sources[i]: the i-th bundled file, in load order: its module's name, its
+# path, its source, and whether it's lazy (see `is_lazy`)
+const sources = Tuple{Symbol,String,String,Bool}[]
+# loaded[i]: the module of sources[i], once `define` has made it
+const loaded = Union{Module,Nothing}[]
+# The module the bundled modules are defined in: the bundle
+const bundle = Ref{Module}()
+# (file the @use is in, path written in the @use) => index into `sources`, or
+# the PkgId of a GitHub repo that is a normal Julia package
 const table = Dict{Tuple{String,String},Union{Int,Base.PkgId}}()
 # The same, by path alone, for the paths that mean the same in any file: GitHub
 # repos and absolute paths. Code evaluated at a REPL has no file of its own.
@@ -31,48 +36,174 @@ const modules = Dict{String,Module}()
 const fallback_paths = Set{String}()
 __init__() = nothing
 
-register(mod::Module, path::String) = (push!(loaded, mod); modules[path] = mod; mod)
+# Each bundled file's path => its index in `sources`
+const by_path = Dict{String,Int}()
+
+"Add a bundled file. `define` makes its module."
+add_source!(name::Symbol, path::String, src::String, lazy::Bool) =
+  (push!(sources, (name, path, src, lazy)); push!(loaded, nothing); by_path[path] = length(sources))
+
+"""
+The bundled file that `@use "path"` in `file` names, found the way Kip finds it:
+`path` itself, with `.jl`, or as a folder's `main.jl`. For a file the bundle
+has no record of, such as a plugin the program includes itself.
+"""
+function find_bundled(file::String, path::String)
+  startswith(path, "~/") && (path = homedir() * path[2:end])
+  occursin(r"^\.{1,2}", path) && (path = normpath(dirname(file), path))
+  isabspath(path) || return nothing
+  for p in (path, path * ".jl", joinpath(path, "main.jl"))
+    i = get(by_path, ispath(p) ? realpath(p) : p, nothing)
+    i === nothing || return i
+  end
+  nothing
+end
+
+# The modules `define` is making
+const defining = Set{Int}()
+
+"""
+The module of sources[i]. The bundle defines each in load order as it loads,
+but a @use of one that comes later defines that one first, as Kip would load
+it then.
+"""
+function define(i::Int)
+  m = loaded[i]
+  m === nothing || return m
+  name, path, src, lazy = sources[i]
+  i in defining && error("$path @uses itself as it loads")
+  push!(defining, i)
+  try
+    Core.eval(bundle[], Expr(:module, true, name, Expr(:block,
+      :(import ..Kip),
+      :(using ..Kip: @use, @dirname),
+      :(Kip.load(@__MODULE__, $src, $path; lazy=$lazy)),
+      :(Kip.loaded[$i] = @__MODULE__))))
+  finally
+    delete!(defining, i)
+  end
+  # The module holds what it needs now, so the bundle needn't keep the source too
+  sources[i] = (name, path, "", lazy)
+  modules[path] = loaded[i]
+end
+
+# is_lazy(i): only files the program includes itself use sources[i], so its
+# __init__ waits for the first @use of it, as it would under Kip. Julia doesn't
+# know it has one: `load` renames it.
+is_lazy(i::Int) = sources[i][4]
+# The lazy modules the program has asked for, in load order. A precompiled
+# bundle or an app image keeps this, so each process starts them again.
+const lazy_asked = Int[]
+# The lazy modules whose __init__ has run in the process `started_in`
+const lazy_started = Int[]
+const started_in = Ref(0)
+# True while a lazy module's own source runs. Its @uses don't ask for anything:
+# only the program asks for a lazy module.
+const defining_lazy = Ref(false)
 
 "True while JuliaC builds an app, when Julia postpones each __init__ to when the app starts"
 building_image() = ccall(:jl_generating_output, Cint, ()) == 1 && Base.JLOptions().incremental == 0
 
-# How many of `loaded` have run their __init__ while an app is built
-const started = Ref(0)
+"True while Julia precompiles the bundle"
+precompiling() = ccall(:jl_generating_output, Cint, ()) == 1 && Base.JLOptions().incremental == 1
+
+# The modules whose postponed __init__ has run while an app is built
+const image_started = Set{Int}()
 
 """
-While JuliaC builds an app, run the postponed __init__ of `loaded[1:i]`. Kip
-runs each file's __init__ as it loads it, and code that `@use`s a module
-expects that. Julia runs them all again when the app starts.
+While JuliaC builds an app, run the postponed __init__ of sources[i] and of
+each module it needs. Kip runs each file's __init__ as it loads it, and code
+that `@use`s a module expects that. Julia runs them all again when the app starts.
 """
-start_through(i::Int) =
-  while started[] < i
-    m = loaded[started[] += 1]
+function start_needed(i::Int)
+  for j in sort!(collect(needs(i)))
+    (is_lazy(j) || j in image_started) && continue
+    push!(image_started, j)
+    m = loaded[j]
     isdefined(m, :__init__) && Base.invokelatest(getfield(m, :__init__))
   end
+end
 
 function lookup(file::String, path::String)
   v = get(table, (file, path), nothing)
   # The bundle knows each file by its real path, but a program can include a file through a link
   v === nothing && isfile(file) && (v = get(table, (realpath(file), path), nothing))
   v === nothing && (v = get(anywhere, path, nothing))
+  v === nothing && (v = find_bundled(file, path))
   if v === nothing
     isfile(file) || error("This bundle has no module for `@use \"$path\"`. It only has the files it was built with.")
     error("""This bundle has no module for `@use "$path"` in $file. \
              If the program includes $file itself, name it in `includes` when you bundle it.""")
   end
   v isa Base.PkgId && return Base.require(v)
-  building_image() && start_through(v)
-  loaded[v]
+  m = define(v)
+  building_image() && start_needed(v)
+  is_lazy(v) && v ∉ lazy_asked && ask_lazy(v)
+  m
 end
+
+"sources[i] and every bundled file it @uses, directly or not"
+function needs(i::Int, out::Set{Int}=Set{Int}())
+  i in out && return out
+  push!(out, i)
+  for ((file, _), v) in table
+    file == sources[i][2] && v isa Int && needs(v, out)
+  end
+  out
+end
+
+"The program asked for the lazy module of sources[i]: start it, and the lazy modules it needs"
+function ask_lazy(i::Int)
+  defining_lazy[] && return
+  for j in sort!(collect(needs(i)))
+    is_lazy(j) && j ∉ lazy_asked && push!(lazy_asked, j)
+  end
+  # Julia never runs an __init__ while it precompiles. The bundle's own
+  # __init__ starts these when it loads.
+  precompiling() || start_asked()
+end
+
+"Run the deferred __init__ of each lazy module asked for that hasn't run it in this process"
+function start_asked()
+  started_in[] == getpid() || (empty!(lazy_started); started_in[] = getpid())
+  for j in lazy_asked
+    j in lazy_started && continue
+    push!(lazy_started, j)
+    m = define(j)
+    isdefined(m, deferred_init) && Base.invokelatest(getfield(m, deferred_init))
+  end
+end
+
+"""
+Start the lazy modules asked for before this process loaded the bundle: while
+it was precompiled, or while JuliaC built the app. Julia does the same for
+every other module. The bundle's own __init__ calls this, after every module's.
+"""
+restart_lazy() = start_asked()
 
 """
 Evaluate `src` in `mod` as if it was the file at `path`. Errors and `@__DIR__`
 name that file, and an `include` in it finds files next to it.
 """
-load(mod::Module, src::String, path::String) =
-  task_local_storage(:SOURCE_PATH, path) do
-    Base.include_string(drop_kip_imports, mod, src, path)
+function load(mod::Module, src::String, path::String; lazy::Bool=false)
+  was = defining_lazy[]
+  defining_lazy[] = lazy
+  try
+    task_local_storage(:SOURCE_PATH, path) do
+      Base.include_string(lazy ? defer_init ∘ drop_kip_imports : drop_kip_imports, mod, src, path)
+    end
+  finally
+    defining_lazy[] = was
   end
+end
+
+# What a lazy module's __init__ is renamed to, so Julia doesn't run it on load
+const deferred_init = Symbol("#__init__")
+
+"`__init__() = …` or `function __init__() … end`, renamed to `deferred_init`"
+defer_init(ex) =
+  Meta.isexpr(ex, (:function, :(=)), 2) && ex.args[1] == :(__init__()) ?
+    Expr(ex.head, Expr(:call, deferred_init), ex.args[2]) : ex
 
 "`using Kip`, `import Kip` or `using Kip: …`. The stand-in is already bound in every bundled module."
 is_kip_import(ex) =
