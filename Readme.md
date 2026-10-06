@@ -31,3 +31,33 @@ Now it's like Kip was built into Julia. It will be available at the REPL and in 
 ```
 
 Besides that just forget everything else you know about packages in Julia
+
+## Bundles
+
+`Kip.bundle` writes a script and every file it `@use`s into one file. The bundle runs without Kip, Git or LibGit2. Each `@use` is resolved when you make the bundle, not when it runs.
+
+```julia
+using Kip
+Kip.bundle("app.jl", "build/app")
+```
+
+This writes four files to `build/app`:
+
+- `bundle.jl` holds the source of each file, in its own module.
+- `Project.toml` and `Manifest.toml` list the registered packages that the files use, at the versions in your project.
+- `juliac.jl` is the file to give JuliaC when you build an app from the bundle.
+
+Run the bundle as you would run the script:
+
+```sh
+julia build/app/bundle.jl [arguments]
+```
+
+The bundle is also a package. Julia compiles it the first time it runs, and loads it from that cache after that. Pass `precompile=false` if your files must run their top-level code each time the bundle starts.
+
+Some things to know:
+
+- The bundle is a snapshot. If you change a file, make the bundle again.
+- `@__DIR__` and `@dirname` still give the folders the files came from. A bundle that reads data files next to its source needs those files on the machine that runs it.
+- A file that another file loads with `include` isn't in the bundle. The bundle reads it from where it was.
+- In a bundle, `Kip` is a small stand-in. It has `@use`, `@dirname`, `Kip.modules` and `Kip.fallback_paths`, but not Kip's other functions, such as `Kip.require`.

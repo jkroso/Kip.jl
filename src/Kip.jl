@@ -240,13 +240,26 @@ modules — e.g. jkroso/LLM.jl's `providers/xai.jl` and a local
 A cached GitHub dependency lives at
 `~/.kip/refs/<user>/<Repo>.jl/<40-hex-commit>/<subpath>`, so its package is the
 directory just above the commit-hash dir (with the `.jl` extension dropped). A
-local file has no such marker, so fall back to the entry-point directory's name.
+local file has no such marker, so fall back to `local_owner`, by default the
+entry-point directory's name.
 """
-function owner_name(path::AbstractString)
+function owner_name(path::AbstractString, local_owner::AbstractString=basename(entry_path()))
   parts = splitpath(path)
   i = findfirst(p -> occursin(r"^[0-9a-f]{40}$", p), parts)
   i !== nothing && i > 1 && return first(splitext(parts[i - 1]))
-  basename(entry_path())
+  local_owner
+end
+
+"""
+The name of the wrapper module for the file at `path`. It can't clash with a
+binding inside the module (a ⭒ prefix or a / separator — neither is a legal
+identifier char), and two same-basename files from different packages get
+distinct names: `main.jl` keeps the bare `⭒<pkg>` form, everything else is
+`<owner-initial>/<base>`.
+"""
+function module_name(path::AbstractString, name::AbstractString=pkgname(path); owner::AbstractString=owner_name(path))
+  basename(path) == "main.jl" && return Symbol(:⭒, name)
+  Symbol(isempty(owner) ? '⭒' : first(owner), '/', first(splitext(basename(path))))
 end
 
 "Require `path` relative to the current module"
@@ -353,17 +366,7 @@ eval_module(path) = Base.include(get_module(path), path)
 
 function get_module(path, name=pkgname(path); interactive=false)
   get!(modules, path) do
-    # Name the wrapper so it can't clash with a binding inside the module (a ⭒
-    # prefix or a / separator — neither is a legal identifier char) and so two
-    # same-basename files from different packages get distinct names: `main.jl`
-    # keeps the bare `⭒<pkg>` form, everything else is `<owner-initial>/<base>`.
-    sym = if basename(path) == "main.jl"
-      Symbol(:⭒, name)
-    else
-      owner = owner_name(path)
-      Symbol(isempty(owner) ? '⭒' : first(owner), '/', first(splitext(basename(path))))
-    end
-    mod = Module(sym)
+    mod = Module(module_name(path, name))
     Core.eval(mod, Expr(:toplevel,
                         :(using Kip),
                         interactive ? :(using InteractiveUtils) : nothing,
@@ -1438,6 +1441,8 @@ tovcat(n) =
     Expr(:vcat, map(torow, n.args)...)
   end
 torow(n) = Meta.isexpr(n, :row) ? n : Expr(:row, n)
+
+include("./bundle.jl")
 
 export @use, @dirname, compile
 
