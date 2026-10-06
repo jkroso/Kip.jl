@@ -5,10 +5,12 @@ using Kip
 const kip_root = dirname(@__DIR__)
 const julia = joinpath(Sys.BINDIR, Base.julia_exename())
 const app = joinpath(@__DIR__, "fixtures", "bundle", "app")
-# Compile caches for the bundles go here, not in ~/.julia. The trailing
-# separator keeps the default depots, where the registered packages are.
+# Compile caches for the bundles go here, not in ~/.julia. The user's depot
+# stays next, where the registered packages are, then Julia's own depots (the
+# trailing separator).
 const depot = mktempdir()
 const sep = Sys.iswindows() ? ";" : ":"
+const depot_path = depot * sep * first(DEPOT_PATH) * sep
 
 "Run `cmd` and return (stdout, stderr, exit code)"
 function run_julia(cmd; env=())
@@ -23,7 +25,7 @@ function bundled(file)
    if Meta.isexpr(ex, :call) && ex.args[1] == :(Kip.add_source!)]
 end
 run_bundle(file, args...) =
-  run_julia(`$julia --startup-file=no $file $args`; env=("JULIA_DEPOT_PATH" => depot * sep,))
+  run_julia(`$julia --startup-file=no $file $args`; env=("JULIA_DEPOT_PATH" => depot_path,))
 
 @testset "Kip.bundle" begin
   @testset "parsing @use calls" begin
@@ -180,7 +182,7 @@ run_bundle(file, args...) =
         println(sprint(showerror, e))
       end
       """
-    out, _, code = run_julia(`$julia --startup-file=no --project=$dir -e $repl`; env=("JULIA_DEPOT_PATH" => depot * sep,))
+    out, _, code = run_julia(`$julia --startup-file=no --project=$dir -e $repl`; env=("JULIA_DEPOT_PATH" => depot_path,))
     @test code == 0
     @test startswith(out, "c\n")
     @test occursin("It only has the files it was built with", out)
