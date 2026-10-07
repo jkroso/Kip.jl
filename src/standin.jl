@@ -236,6 +236,15 @@ function pathform(first)
   nothing
 end
 
+"""
+`normpath(a, b)` for a @use path, with `/` between its parts on every OS. The
+bundle records each path as the bundler joined it, with `/`, and Windows'
+normpath would make `github.com\\jkroso\\Prospects.jl\\BitSet.jl` of
+`@use "github.com/jkroso/Prospects.jl" ["BitSet.jl"]`, which it has no record of.
+"""
+use_join(a::AbstractString, b::AbstractString) =
+  Sys.iswindows() ? replace(normpath(a, b), '\\' => '/') : normpath(a, b)
+
 "Get the directory of the current file: of its copy in the bundle's files/ folder"
 macro dirname() dirname(String(__source__.file)) end
 
@@ -294,7 +303,7 @@ macro use(first, rest...)
     elseif inbrackets(n)
       for row in tovcat(n).args
         relpath, rest = (row.args[1], row.args[2:end])
-        firstarg = ispair(relpath) ? :($(normpath(path, relpath.args[2])) => $(relpath.args[3])) : normpath(path, relpath)
+        firstarg = ispair(relpath) ? :($(use_join(path, relpath.args[2])) => $(relpath.args[3])) : use_join(path, relpath)
         push!(exprs, esc(macroexpand(__module__, Expr(:macrocall, getfield(Kip, Symbol("@use")), __source__, firstarg, rest...))))
       end
     elseif n isa LineNumberNode

@@ -295,6 +295,10 @@ function use_paths!(out::Vector{String}, ex)
   out
 end
 
+"`normpath(a, b)` for a @use path, with `/` between its parts on every OS, as the stand-in joins them"
+use_join(a::AbstractString, b::AbstractString) =
+  Sys.iswindows() ? replace(normpath(a, b), '\\' => '/') : normpath(a, b)
+
 "The paths the `@use` call with arguments `args` looks up, built the way the macro builds them"
 function use_call_paths!(out::Vector{String}, args)
   isempty(args) && return out
@@ -311,7 +315,7 @@ function use_call_paths!(out::Vector{String}, args)
   alias === nothing && !splatall && !isempty(names) && all(inbrackets, names) || push!(out, path)
   for n in filter(inbrackets, names), row in tovcat(n).args
     relpath, rest = row.args[1], row.args[2:end]
-    sub = ispair(relpath) ? :($(normpath(path, relpath.args[2])) => $(relpath.args[3])) : normpath(path, relpath)
+    sub = ispair(relpath) ? :($(use_join(path, relpath.args[2])) => $(relpath.args[3])) : use_join(path, relpath)
     use_call_paths!(out, Any[sub, rest...])
   end
   out
