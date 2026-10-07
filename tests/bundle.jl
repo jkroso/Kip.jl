@@ -21,7 +21,8 @@ end
 "(module name, path, lazy) for each file in the bundle `file`"
 function bundled(file)
   pkg = only(ex for ex in Meta.parseall(read(file, String)).args if Meta.isexpr(ex, :module))
-  [(String(eval(ex.args[2])), ex.args[3], ex.args[5]) for ex in pkg.args[3].args
+  # A path is `Kip.here("folder/file.jl")`: the file's place in files/
+  [(String(eval(ex.args[2])), ex.args[3].args[2], ex.args[5]) for ex in pkg.args[3].args
    if Meta.isexpr(ex, :call) && ex.args[1] == :(Kip.add_source!)]
 end
 run_bundle(file, args...) =
@@ -186,6 +187,52 @@ run_bundle(file, args...) =
     @test code == 0
     @test startswith(out, "c\n")
     @test occursin("It only has the files it was built with", out)
+  end
+
+  @testset "finding the files a file reads from its own folder" begin
+    dir = mktempdir()
+    mkpath(joinpath(dir, "data", "sub"))
+    for f in ("a.json", "b.txt", "c.csv", joinpath("data", "x.bin"))
+      touch(joinpath(dir, f))
+    end
+    ex = Meta.parseall("""
+      const A = read(joinpath(@__DIR__, "a.json"))
+      f() = open(joinpath(@dirname, "data", "x.bin"))
+      g() = "\$(@__DIR__)/b.txt"
+      h() = joinpath(dirname(@__FILE__), "data", "sub")
+      k() = @__DIR__() * "/c.csv"
+      missing_file = joinpath(@__DIR__, "nope.json")
+      here = @__DIR__
+      quote joinpath(@__DIR__, "a.json") end
+      """)
+    found = Kip.data_paths!(Set{String}(), ex, dir)
+    @test found == Set(realpath.(joinpath.(dir, ["a.json", joinpath("data", "x.bin"), "b.txt", joinpath("data", "sub"), "c.csv"])))
+  end
+
+  @testset "the bundle runs once the files it was made from are gone" begin
+    # Bundle a copy of the fixtures, then delete the copy
+    tree = mktempdir()
+    cp(dirname(app), joinpath(tree, "bundle"))
+    entry = joinpath(tree, "bundle", "app", "withdata.jl")
+    kip_out, _, kip_code = run_julia(`$julia --startup-file=no --project=$kip_root $entry`)
+    @test kip_out == "hello from data, part uses c, true\n"
+    dir = mktempdir()
+    file = Kip.bundle(entry, dir; project)
+    rm(tree; recursive=true)
+    @test isfile(joinpath(dir, "files", "app", "data", "greeting.txt"))
+    @test isfile(joinpath(dir, "files", "app", "parts", "part.jl"))
+    @test isfile(joinpath(dir, "files", "lib", "c.jl"))
+    for run in 1:2 # run 1 compiles the bundle, run 2 loads it from that cache
+      out, err, code = run_bundle(file)
+      @test out == kip_out
+      @test code == kip_code == 0
+    end
+    # Moved to another folder, as onto another machine, it still runs
+    moved = joinpath(mktempdir(), "moved")
+    mv(dir, moved)
+    out, _, code = run_bundle(joinpath(moved, "bundle.jl"))
+    @test out == kip_out
+    @test code == 0
   end
 
   @testset "a package the project doesn't have" begin

@@ -14,6 +14,13 @@ const sources = Tuple{Symbol,String,String,Bool}[]
 const loaded = Union{Module,Nothing}[]
 # The module the bundled modules are defined in: the bundle
 const bundle = Ref{Module}()
+# The bundle's files/ folder, which holds a copy of each file the bundle was
+# made from. The bundled code runs as these copies, so `@__DIR__` finds the
+# data files beside them on any machine the bundle is copied to.
+const root = Ref{String}()
+
+"The copy in files/ of the file the bundle knows as `path`, e.g. \"app/main.jl\""
+here(path::String) = joinpath(root[], split(path, '/')...)
 # (file the @use is in, path written in the @use) => index into `sources`, or
 # the PkgId of a GitHub repo that is a normal Julia package
 const table = Dict{Tuple{String,String},Union{Int,Base.PkgId}}()
@@ -229,7 +236,7 @@ function pathform(first)
   nothing
 end
 
-"Get the directory the current file was in when the bundle was built"
+"Get the directory of the current file: of its copy in the bundle's files/ folder"
 macro dirname() dirname(String(__source__.file)) end
 
 "Import a bundled file, or a registered package, the way Kip's `@use` does"

@@ -41,9 +41,10 @@ using Kip
 Kip.bundle("app.jl", "build/app")
 ```
 
-This writes four files to `build/app`:
+This writes these files to `build/app`:
 
 - `bundle.jl` holds the source of each file, in its own module.
+- `files/` holds a copy of each file the program reads from where its code is. The bundled code runs as these copies.
 - `Project.toml` and `Manifest.toml` list the registered packages that the files use, at the versions in your project.
 - `juliac.jl` is the file to give JuliaC when you build an app from the bundle.
 
@@ -58,8 +59,14 @@ The bundle is also a package. Julia compiles it the first time it runs, and load
 Some things to know:
 
 - The bundle is a snapshot. If you change a file, make the bundle again.
-- `@__DIR__` and `@dirname` still give the folders the files came from. A bundle that reads data files next to its source needs those files on the machine that runs it.
-- A file that another file loads with `include` isn't in the bundle. The bundle reads it from where it was. When the path is in the source, such as `include("x.jl")` or `include(joinpath(@__DIR__, "x.jl"))`, the bundle also holds every file that file `@use`s.
+- The folder is the whole program. You can copy it to another machine, with another OS, and run it or build it with JuliaC there.
+- `@__DIR__` and `@dirname` give the folder of a file's copy in `files/`. The bundler copies these files there:
+  - every file in the bundle, and every file the program loads with `include`;
+  - each file or folder that the source names by a path from its own folder, such as `joinpath(@__DIR__, "data.json")`;
+  - the whole folder of each package that a `@use` got from GitHub, except hidden files such as `.git`.
+
+  If your code builds a path some other way, name the file with `files`: `Kip.bundle("app.jl", "build/app"; files=["data/rates.csv"])`. A relative path is from the folder of the script.
+- A file that another file loads with `include` isn't in `bundle.jl`. The bundle reads it from `files/`. When the path is in the source, such as `include("x.jl")` or `include(joinpath(@__DIR__, "x.jl"))`, the bundle also holds every file that file `@use`s.
 - If your program finds the files it includes while it runs, such as plugins in a folder, name them with `includes`. The plugins stay where they are, but the bundle holds every file they `@use`:
 
   ```julia
