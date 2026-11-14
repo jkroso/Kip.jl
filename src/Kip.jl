@@ -208,6 +208,19 @@ function checkout_repo(repo::LibGit2.GitRepo, username, reponame, tag)
   dest
 end
 
+# The folder that each package was loaded from. A repository can change while a
+# program runs: a commit gives it a new snapshot, and an edit makes it dirty,
+# so `checkout_repo` would give its working tree and not its snapshot. A
+# program that loaded more of the package after that would get a second copy
+# of it, with types that don't match the first copy's. So a package keeps the
+# folder it was first loaded from until the program ends.
+const checkouts = Dict{Tuple{String,String,Union{Nothing,String}},String}()
+
+"The folder to load `username/reponame` at `tag` from. `checkout_repo` picks it the first time, and it stays the same after that."
+checkout(repo, username, reponame, tag) =
+  get!(() -> checkout_repo(repo, username, reponame, tag), checkouts,
+       (String(username), String(reponame), isnothing(tag) ? nothing : String(tag)))
+
 function snapshot(repo, dest)
   mkpath(dest)
   src = LibGit2.path(repo)
@@ -306,7 +319,7 @@ function require(path::AbstractString, base::AbstractString)
         end
       end
     else
-      package = checkout_repo(repo, username, reponame, tag)
+      package = checkout(repo, username, reponame, tag)
       file, pkgname = if isnothing(subpath)
         complete(package, pkgname)
       else
@@ -467,7 +480,7 @@ function resolve_use_dep!(deps, p, base)
       try
         repo = getrepo(username, reponame)
         if !is_pkg3_pkg(LibGit2.path(repo))
-          package = checkout_repo(repo, username, reponame, tag)
+          package = checkout(repo, username, reponame, tag)
           path, name = if isnothing(subpath)
             complete(package, pkgn)
           else
