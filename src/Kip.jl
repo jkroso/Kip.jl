@@ -33,6 +33,8 @@ __init__() = begin
   global cache = joinpath(home, "cache")
   global stdlib = isdir(Sys.STDLIB) ? Set(readdir(Sys.STDLIB)) : Set{String}()
   global stdlib_uuids = Dict{String,String}()
+  # A program that was built ahead of time starts with the folders its packages had during the build
+  empty!(checkouts)
   if isdir(Sys.STDLIB)
     for d in readdir(Sys.STDLIB)
       proj = joinpath(Sys.STDLIB, d, "Project.toml")
@@ -214,12 +216,19 @@ end
 # program that loaded more of the package after that would get a second copy
 # of it, with types that don't match the first copy's. So a package keeps the
 # folder it was first loaded from until the program ends.
-const checkouts = Dict{Tuple{String,String,Union{Nothing,String}},String}()
+#
+# Each key has the place of the package's repository under `repos`, and the
+# tag. A program that's built ahead of time, like an app, has the folders that
+# were found while it was built. It can run on another machine, or give `repos`
+# a new value, and then those folders aren't the ones to use. With the place in
+# the key, a package under a new `repos` is looked for again. `__init__` also
+# forgets every folder when a program starts.
+const checkouts = Dict{Tuple{String,Union{Nothing,String}},String}()
 
 "The folder to load `username/reponame` at `tag` from. `checkout_repo` picks it the first time, and it stays the same after that."
 checkout(repo, username, reponame, tag) =
   get!(() -> checkout_repo(repo, username, reponame, tag), checkouts,
-       (String(username), String(reponame), isnothing(tag) ? nothing : String(tag)))
+       (joinpath(repos, username, reponame), isnothing(tag) ? nothing : String(tag)))
 
 function snapshot(repo, dest)
   mkpath(dest)
