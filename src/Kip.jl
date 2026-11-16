@@ -25,6 +25,36 @@ end
 
 include("./deps.jl")
 
+# `__init__` gives these their values. They have types so that Julia knows what
+# the code that reads them does. Without the types, that code is compiled again
+# each time a package adds a method to a function like `joinpath` or `in`.
+global initial_pwd::String
+global home::String
+global repos::String
+global refs::String
+global cache::String
+global stdlib::Set{String}
+global stdlib_uuids::Dict{String,String}
+
+"""
+Call `f` so that Julia doesn't tie the caller's compiled code to `f`'s. Kip
+uses it for the work that's rare or slow: a clone, a checkout, an install, a
+compile. Those go deep into LibGit2, Pkg and Julia's own loader, and a package
+that adds a method often makes Julia throw their compiled code away. If
+`require` called them directly, its compiled code would go too, and each
+program would spend seconds compiling `require` again.
+"""
+apart(f, args...; kw...) = Base.invokelatest(f, args...; kw...)
+
+"""
+The settings that Kip compiles each file with. A program can run with `-O0` or
+`-O1`, as a test does to start sooner. Julia would then compile the files that
+it loads with that level too, and a program that runs at full speed could get
+those slow files later. So Kip compiles with at least the usual level, `-O2`,
+and one set of compiled files serves both kinds of program.
+"""
+cache_flags() = (f = Base.CacheFlags(); Base.CacheFlags(f; opt_level=max(f.opt_level, 2)))
+
 __init__() = begin
   global initial_pwd = pwd()
   global home = get(ENV, "KIP_DIR", joinpath(homedir(), ".kip"))
@@ -171,7 +201,7 @@ LibGit2.path(r::FrozenRepo) = r.path
 
 function head_name(repo::LibGit2.GitRepo)
   cd(LibGit2.path(repo)) do
-    rstrip(read(git(["rev-parse", "--short", "HEAD"]), String))
+    rstrip(read(git(["rev-parse", "--short", "HEAD"])::Cmd, String))
   end
 end
 
@@ -227,7 +257,7 @@ const checkouts = Dict{Tuple{String,Union{Nothing,String}},String}()
 
 "The folder to load `username/reponame` at `tag` from. `checkout_repo` picks it the first time, and it stays the same after that."
 checkout(repo, username, reponame, tag) =
-  get!(() -> checkout_repo(repo, username, reponame, tag), checkouts,
+  get!(() -> apart(checkout_repo, repo, username, reponame, tag)::String, checkouts,
        (joinpath(repos, username, reponame), isnothing(tag) ? nothing : String(tag)))
 
 function snapshot(repo, dest)
@@ -310,23 +340,7 @@ function require(path::AbstractString, base::AbstractString)
     pkgname = splitext(reponame)[1]
     repo = getrepo(username, reponame)
     if is_pkg3_pkg(LibGit2.path(repo))
-      get!(modules, path) do
-        # A frozen build only loads what's already installed, so it doesn't need Pkg
-        activate = repo isa FrozenRepo ? with_project : (f, b) -> Base.invokelatest(load_pkg().activate, f, b)
-        activate(base) do
-          if repo isa FrozenRepo
-            # Compilation mode: skip Git operations, package is already installed
-            is_installed(base, pkgname) || error("$pkgname not installed; can't install in frozen/compilation mode")
-          elseif is_installed(base, pkgname)
-            update_pkg(repo, tag)
-          else
-            add_pkg(repo, tag)
-          end
-          deps = TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
-          uuid = Base.UUID(deps[pkgname])
-          Base.require(Base.PkgId(uuid, pkgname))
-        end
-      end
+      get!(() -> apart(require_package, repo, String(base), String(pkgname), tag)::Module, modules, path)
     else
       package = checkout(repo, username, reponame, tag)
       file, pkgname = if isnothing(subpath)
@@ -336,6 +350,25 @@ function require(path::AbstractString, base::AbstractString)
       end
       load_module(file)
     end
+  end
+end
+
+"Load the Julia package in `repo`. This installs it in the project at `base`, or updates it there, first."
+function require_package(repo, base::String, pkgname::String, tag)
+  # A frozen build only loads what's already installed, so it doesn't need Pkg
+  activate = repo isa FrozenRepo ? with_project : (f, b) -> Base.invokelatest(load_pkg().activate, f, b)
+  activate(base) do
+    if repo isa FrozenRepo
+      # Compilation mode: skip Git operations, package is already installed
+      is_installed(base, pkgname) || error("$pkgname not installed; can't install in frozen/compilation mode")
+    elseif is_installed(base, pkgname)
+      update_pkg(repo, tag)
+    else
+      add_pkg(repo, tag)
+    end
+    deps = TOML.parsefile(joinpath(base, "Project.toml"))["deps"]
+    uuid = Base.UUID(deps[pkgname])
+    Base.require(Base.PkgId(uuid, pkgname))
   end
 end
 
@@ -370,7 +403,7 @@ function getrepo(user, repo)
       FrozenRepo(localpath)
     end
   else
-    LibGit2.clone("https://github.com/$user/$repo.git", localpath)
+    apart(LibGit2.clone, "https://github.com/$user/$repo.git", localpath)::LibGit2.GitRepo
   end
 end
 
@@ -693,7 +726,7 @@ function ensure_pkg_deps_loaded!(path::String)
         try Base.invokelatest(load_pkg().add, pkg) catch; end
       end
       # Load into parent so compilecache passes it as concrete_deps
-      try Base.require(pkg_id) catch; end
+      try apart(Base.require, pkg_id) catch; end
     end
   finally
     Base.ACTIVE_PROJECT[] = old
@@ -847,6 +880,24 @@ function precompile_deps!(path::String; visited::Set{String}=Set{String}())
   dirs
 end
 
+"Show what the subprocess that compiles `src_path` will see"
+function debug_deps(src_path, cache_name)
+  wrapper_content = read(src_path, String)
+  for line in split(wrapper_content, "\n")
+    m = match(r"Base\.require\(Base\.PkgId\(Base\.UUID\(\"([^\"]+)\"\), \"([^\"]+)\"\)\)", line)
+    isnothing(m) && continue
+    dep_uuid, dep_name = m[1], m[2]
+    dep_pkg_id = Base.PkgId(Base.UUID(dep_uuid), dep_name)
+    on_lp = any(p -> begin
+      expanded = Base.load_path_expand(p)
+      expanded !== nothing && isfile(joinpath(dirname(expanded), "Project.toml")) &&
+        get(TOML.parsefile(joinpath(dirname(expanded), "Project.toml")), "name", "") == dep_name
+    end, LOAD_PATH)
+    lp = Base.locate_package(dep_pkg_id)
+    @debug "compilecache dep check" cache_name dep_name on_load_path=on_lp locate=lp loaded=haskey(Base.loaded_modules, dep_pkg_id)
+  end
+end
+
 """Compile a file's cache .ji without loading the module into the process.
 Used by precompile_deps! to ensure .ji files exist for the parent's
 compilecache subprocess without causing duplicate module loads at runtime."""
@@ -874,27 +925,14 @@ function ensure_compiled!(path::String, name::String=pkgname(path); visited::Set
 
   # Compile only — don't load
   src_path = joinpath(pkg_dir, "src", "$cache_name.jl")
-  # DEBUG: show what the subprocess will see
-  wrapper_content = read(src_path, String)
-  for line in split(wrapper_content, "\n")
-    m = match(r"Base\.require\(Base\.PkgId\(Base\.UUID\(\"([^\"]+)\"\), \"([^\"]+)\"\)\)", line)
-    isnothing(m) && continue
-    dep_uuid, dep_name = m[1], m[2]
-    dep_pkg_id = Base.PkgId(Base.UUID(dep_uuid), dep_name)
-    on_lp = any(p -> begin
-      expanded = Base.load_path_expand(p)
-      expanded !== nothing && isfile(joinpath(dirname(expanded), "Project.toml")) &&
-        get(TOML.parsefile(joinpath(dirname(expanded), "Project.toml")), "name", "") == dep_name
-    end, LOAD_PATH)
-    lp = Base.locate_package(dep_pkg_id)
-    @debug "compilecache dep check" cache_name dep_name on_load_path=on_lp locate=lp loaded=haskey(Base.loaded_modules, dep_pkg_id)
-  end
+  # This reads a file for each entry of LOAD_PATH, so it only runs when debug messages are on
+  haskey(ENV, "JULIA_DEBUG") && apart(debug_deps, src_path, cache_name)
   old_auto = get(ENV, "JULIA_PKG_PRECOMPILE_AUTO", nothing)
   old_git_prompt = get(ENV, "GIT_TERMINAL_PROMPT", nothing)
   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   try
-    Base.compilecache(pkg_id, src_path)
+    apart(Base.compilecache, pkg_id, src_path; cacheflags=cache_flags())
   finally
     if isnothing(old_auto)
       delete!(ENV, "JULIA_PKG_PRECOMPILE_AUTO")
@@ -1002,6 +1040,20 @@ function create_cache_package(path::String, hash::String, name::String, source::
   (pkg_dir, Base.PkgId(uuid, name))
 end
 
+"True if `text`, from a compile that failed, names a fault in the file's own code. Such a file can't be compiled until it changes."
+lasting(text) = occursin("breaks incremental compilation", text) || occursin("Evaluation into", text) || occursin("overwritten in", text) || occursin("Method overwriting", text)
+
+"""
+True if the marker file at `path` still tells Kip not to compile its file. A
+marker that names a fault in the file's own code lasts until the file changes.
+Any other marker is from a compile that failed for a reason outside the file.
+One cause is a second program that compiles Kip, or a file that this one uses,
+at the same moment. That kind lasts ten minutes, and then Kip tries the compile
+again. Without the limit, one bad moment made a file, and every file that uses
+it, load from source in every later program.
+"""
+marked(path) = isfile(path) && (lasting(read(path, String)) || time() - mtime(path) < 600)
+
 "Try to load a module from the compile cache"
 function load_from_cache(path::String, name::String)
   source = read(path, String)
@@ -1021,7 +1073,7 @@ function load_from_cache(path::String, name::String)
   # (e.g. a precompile opt-out, or it evals into a closed module). The marker is
   # keyed by source hash, so editing the file invalidates it automatically. Skip
   # the doomed compilecache subprocess and signal include-fallback (return nothing).
-  isfile(nocompile_marker) && return nothing
+  marked(nocompile_marker) && return nothing
 
   # Ensure initial_pwd is on LOAD_PATH — this is where @use PkgName installs
   # packages, and the compilecache subprocess needs to locate them there
@@ -1060,7 +1112,7 @@ function load_from_cache(path::String, name::String)
       ocache = Base.ocachefile_from_cachefile(ji_path)
       ocache_path = isfile(ocache) ? ocache : nothing
       try
-        mod = Base._require_from_serialized(pkg_id, ji_path, ocache_path, path)
+        mod = apart(Base._require_from_serialized, pkg_id, ji_path, ocache_path, path)::Module
         return mod
       catch
         # Stale cache, recompile
@@ -1077,7 +1129,7 @@ function load_from_cache(path::String, name::String)
   ENV["GIT_TERMINAL_PROMPT"] = "0"
   stderr_buf = IOBuffer()
   try
-    result = Base.compilecache(pkg_id, src_path, stderr_buf)
+    result = apart(Base.compilecache, pkg_id, src_path, stderr_buf; cacheflags=cache_flags())
     # Print any non-error stderr output (warnings, etc.)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
@@ -1092,18 +1144,18 @@ function load_from_cache(path::String, name::String)
       return nothing
     end
     ji_path, ocache_path = result
-    return Base._require_from_serialized(pkg_id, ji_path, ocache_path, src_path)
+    return apart(Base._require_from_serialized, pkg_id, ji_path, ocache_path, src_path)::Module
   catch e
     # Only mark as non-precompilable for errors that indicate the module
     # is fundamentally incompatible (e.g. eval into closed module, method overwrites)
     stderr_output = String(take!(stderr_buf))
     isempty(stderr_output) || print(stderr, stderr_output)
-    err_str = try sprint(showerror, e) catch; string(e) end * "\n" * stderr_output
+    err_str = apart(error_text, e, stderr_output)::String
     # Structural opt-outs that make the module fundamentally non-precompilable.
     # "breaks incremental compilation" is Julia 1.12's wording for evaluating into
     # / creating globals in a closed module; the older phrasings are kept for
     # compatibility. Recording the marker lets later loads skip the doomed compile.
-    if occursin("breaks incremental compilation", err_str) || occursin("Evaluation into", err_str) || occursin("overwritten in", err_str) || occursin("Method overwriting", err_str)
+    if lasting(err_str)
       mkpath(dirname(nocompile_marker))
       write(nocompile_marker, err_str)
     end
@@ -1121,6 +1173,9 @@ function load_from_cache(path::String, name::String)
     end
   end
 end
+
+"What the error `e` says, and then what the compile wrote to stderr"
+error_text(e, stderr_output) = string(try sprint(showerror, e) catch; string(e) end, "\n", stderr_output)
 
 # Functions whose first argument gets mutated. A top-level call to one of these
 # on an @use-imported binding is a cross-module side effect (see below).
@@ -1248,6 +1303,8 @@ function has_fallback_dep(path::String; visited::Set{String}=Set{String}())
   false
 end
 
+warn_fallback(path, e) = @warn "Cache compilation failed for $path, falling back to include" exception=e
+
 """
 Load a module with stable identity — paths are normalized via `realpath` so
 repeated calls to the same file always return the exact same Module (`===`).
@@ -1270,7 +1327,7 @@ function load_module(path)
       # Inside a compilecache subprocess, don't fall back to get_module+include
       # because creating anonymous modules breaks incremental compilation
       !frozen && Base.generating_output() && rethrow()
-      @warn "Cache compilation failed for $path, falling back to include" exception=e
+      apart(warn_fallback, path, e)
       nothing
     end
   end
@@ -1465,6 +1522,29 @@ tovcat(n) =
 torow(n) = Meta.isexpr(n, :row) ? n : Expr(:row, n)
 
 include("./bundle.jl")
+
+# Compile the usual paths while Kip itself is compiled. Without this, each
+# program compiles `require` and `@use` again when it starts.
+if Base.generating_output()
+  for ex in (:(@use "./a"), :(@use "./a" b), :(@use "./a" => A b c), :(@use "./a" => A),
+             :(@use "github.com/a/b.jl" c), :(@use "github.com/a/b.jl/c" d => e @f),
+             :(@use A), :(@use A: b, c), :(@use A.b), :(@use A...))
+    try macroexpand(@__MODULE__, ex) catch end
+  end
+  precompile(require, (String, String))
+  precompile(require, (String,))
+  precompile(load_module, (String,))
+  precompile(load_from_cache, (String, String))
+  precompile(ensure_compiled!, (String,))
+  precompile(getrepo, (SubString{String}, SubString{String}))
+  for tag in (Nothing, SubString{String})
+    precompile(checkout, (LibGit2.GitRepo, SubString{String}, SubString{String}, tag))
+    precompile(checkout_repo, (LibGit2.GitRepo, SubString{String}, SubString{String}, tag))
+    precompile(require_package, (LibGit2.GitRepo, String, String, tag))
+  end
+  precompile(error_text, (Any, String))
+  precompile(warn_fallback, (String, Any))
+end
 
 export @use, @dirname, compile
 
