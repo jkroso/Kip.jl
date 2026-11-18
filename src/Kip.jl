@@ -1054,6 +1054,67 @@ it, load from source in every later program.
 """
 marked(path) = isfile(path) && (lasting(read(path, String)) || time() - mtime(path) < 600)
 
+"""
+The `.ji` files in `cache_dir`, the one this Julia setup would write first.
+The name of a file says which setup wrote it (the project, the flags and the
+CPU target), so the others come from other projects or other flags.
+"""
+function cache_files(pkg_id::Base.PkgId, cache_dir::String)
+  files = [joinpath(cache_dir, f) for f in readdir(cache_dir) if endswith(f, ".ji")]
+  length(files) > 1 || return files
+  own = try
+    basename(Base.compilecache_path(pkg_id, Base.preferences_blob(first(files)); flags=cache_flags()))
+  catch
+    ""
+  end
+  sort!(files, by = f -> basename(f) != own)
+end
+
+"""
+Whether loading the compiled file `ji` would load a second copy of a module that
+this program has loaded already. A compiled file names the build of each module
+it was compiled against, and `Base._require_from_serialized` loads exactly those
+builds. Julia's own loader rejects such a file, but it doesn't check the files
+Kip passes to `_require_from_serialized`. A module that isn't loaded yet is
+checked the same way, through the file that holds the build `ji` names.
+"""
+function needs_other_build(ji::String, seen::Dict{String,Bool}=Dict{String,Bool}())
+  haskey(seen, ji) && return seen[ji]
+  seen[ji] = false
+  seen[ji] = try
+    any(cache_deps(ji)) do (key, build)
+      loaded = get(Base.loaded_modules, key, nothing)
+      loaded isa Module && return Base.module_build_id(loaded) != build
+      file = file_with_build(key, build)
+      file !== nothing && needs_other_build(file, seen)
+    end
+  catch
+    false # a file this can't read goes to the loader, as before
+  end
+end
+
+"The build of each module that the compiled file `ji` was compiled against."
+function cache_deps(ji::String)
+  open(ji) do io
+    iszero(Base.isvalid_cache_header(io)) && return Pair{Base.PkgId,UInt128}[]
+    Base.parse_cache_header(io, ji)[3]
+  end
+end
+
+"The compiled file that holds build `build` of the module `key`, if there is one."
+function file_with_build(key::Base.PkgId, build::UInt128)
+  for file in Base.find_all_in_cache_path(key)
+    found = open(file) do io
+      checksum = Base.isvalid_cache_header(io)
+      iszero(checksum) && return false
+      id = first(Base.parse_cache_header(io, file)[1])
+      (UInt128(checksum) << 64) | (id.second % UInt64) == build
+    end
+    found && return file
+  end
+  nothing
+end
+
 "Try to load a module from the compile cache"
 function load_from_cache(path::String, name::String)
   source = read(path, String)
@@ -1106,9 +1167,12 @@ function load_from_cache(path::String, name::String)
   # Check for existing compiled cache
   cache_dir = Base.compilecache_dir(pkg_id)
   if isdir(cache_dir)
-    for f in readdir(cache_dir)
-      endswith(f, ".ji") || continue
-      ji_path = joinpath(cache_dir, f)
+    for ji_path in cache_files(pkg_id, cache_dir)
+      # The folder holds a file for each Julia setup that compiled this module,
+      # and another setup's file can need other builds of modules this program
+      # has loaded already. _require_from_serialized would load second copies of
+      # them. Leave that file for its own setup and try the next.
+      apart(needs_other_build, ji_path)::Bool && continue
       ocache = Base.ocachefile_from_cachefile(ji_path)
       ocache_path = isfile(ocache) ? ocache : nothing
       try

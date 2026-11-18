@@ -392,3 +392,84 @@ end
     @test !isdir(cdir) || !any(endswith(".ji"), readdir(cdir))
   end
 end
+
+@testset "a module's cache made against another build of its dep is skipped" begin
+  # The compiled-files folder holds a build of a module for each Julia setup
+  # that compiled it (a project, flags or CPU target of its own), and each
+  # build names the builds of the modules it was compiled against. Here `top`
+  # has one build made against each of two builds of `leaf`. The program has
+  # the second `leaf` loaded already, so Kip must load the `top` made against
+  # it. The other `top` would load a second copy of `leaf`, and `top`'s
+  # `Thing` would be a different type from the program's.
+  kip_root = dirname(@__DIR__)
+  julia = joinpath(Sys.BINDIR, Base.julia_exename())
+  tmp = mktempdir()
+  src = joinpath(tmp, "src"); mkpath(src)
+  write(joinpath(src, "leaf.jl"), "struct Thing end  # $(rand(UInt64))\n")
+  write(joinpath(src, "top.jl"), "@use \"./leaf.jl\" Thing\nmake() = Thing()\n")
+  sep = Sys.iswindows() ? ";" : ":"
+  env = ["KIP_DIR" => joinpath(tmp, "kip"),
+         "JULIA_DEPOT_PATH" => join([joinpath(tmp, "depot"); DEPOT_PATH], sep)]
+  script = joinpath(tmp, "run.jl")
+  write(script, raw"""
+  pushfirst!(LOAD_PATH, ARGS[2])
+  using Kip
+  top = joinpath(ARGS[3], "top.jl")
+  if ARGS[1] == "build"
+    Kip.load_module(top)
+  else
+    leaf = joinpath(ARGS[3], "leaf.jl")
+    hash = Kip.source_hash(read(leaf, String))
+    name = Kip.valid_identifier(replace(Kip.pkgname(leaf), r"[^\w]" => "_") * "_" * hash[1:3])
+    pkg = Base.PkgId(Kip.deterministic_uuid(hash), name)
+    ji = joinpath(Base.compilecache_dir(pkg), ARGS[4])
+    oc = Base.ocachefile_from_cachefile(ji)
+    leafmod = Base._require_from_serialized(pkg, ji, isfile(oc) ? oc : nothing,
+                                            joinpath(Kip.cache, hash, "src", name * ".jl"))
+    topmod = Kip.load_module(top)
+    println("SAME: ", Base.invokelatest(topmod.make) isa leafmod.Thing)
+  end
+  """)
+  run_phase(args...) = withenv(env...) do
+    errfile = tempname()
+    proc = pipeline(ignorestatus(`$julia --startup-file=no --project=$kip_root $script $args`), stderr=errfile)
+    out = read(proc, String)
+    err = read(errfile, String); rm(errfile)
+    occursin("ERROR", err) && println("SUBPROCESS STDERR ($(args[1])):\n", err)
+    out, err
+  end
+  # The subprocesses compile into the temporary depot, the first in their DEPOT_PATH.
+  function cache_dir(file)
+    p = joinpath(src, file)
+    hash = Kip.source_hash(read(p, String))
+    name = Kip.valid_identifier(replace(Kip.pkgname(p), r"[^\w]" => "_") * "_" * hash[1:3])
+    joinpath(tmp, "depot", first(Base.cache_file_entry(Base.PkgId(Kip.deterministic_uuid(hash), name))))
+  end
+  dirs = [cache_dir("leaf.jl"), cache_dir("top.jl")]
+  aside = joinpath(tmp, "aside")
+
+  run_phase("build", kip_root, src)                       # leaf build 1, and top made against it
+  for d in dirs, f in readdir(d)
+    mkpath(joinpath(aside, basename(d))); mv(joinpath(d, f), joinpath(aside, basename(d), f))
+  end
+  run_phase("build", kip_root, src)                       # leaf build 2, and top made against it
+  second = ""
+  for d in dirs
+    for f in readdir(d)
+      endswith(f, ".dSYM") && (rm(joinpath(d, f), recursive=true); continue)
+      stem, ext = split(f, "."; limit=2)
+      renamed = first(stem, length(stem) - 5) * "zzzzz." * ext   # sorts after build 1
+      mv(joinpath(d, f), joinpath(d, renamed))
+      endswith(renamed, ".ji") && d == dirs[1] && (second = renamed)
+    end
+    for f in readdir(joinpath(aside, basename(d)))
+      mv(joinpath(aside, basename(d), f), joinpath(d, f))
+    end
+  end
+  @test count(endswith(".ji"), readdir(dirs[2])) == 2
+
+  out, err = run_phase("check", kip_root, src, second)
+  isempty(err) || println("SUBPROCESS STDERR:\n", err)
+  @test occursin("SAME: true", out)
+  @test !occursin("Replacing module", err)
+end
