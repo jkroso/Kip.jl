@@ -4,7 +4,7 @@
 #
 
 """
-    bundle(entry, dir; project, name, includes=[], files=[], precompile=true) -> String
+    bundle(entry, dir; project, name, includes=[], files=[], precompile=true, warm=nothing) -> String
 
 Write the script `entry` and every Kip file it `@use`s, directly or through
 other files, into `dir`. Returns the path of `dir/bundle.jl`.
@@ -18,6 +18,7 @@ other files, into `dir`. Returns the path of `dir/bundle.jl`.
 - `Project.toml` and `Manifest.toml` list the registered packages the files
   use, at the versions in `project`.
 - `juliac.jl` is the file to give JuliaC to build an app from the bundle.
+- `warm.jl`, if `warm` names a file: see `warm` below.
 
 Each `@use` is resolved now, so the bundle has no need for Kip when it runs.
 It includes a small stand-in for Kip instead, which only looks modules up.
@@ -52,6 +53,11 @@ Keywords:
 - `files`: other files or folders the program reads from where its code is,
   by paths the bundler can't see in the source. A relative path is from the
   folder of `entry`.
+- `warm`: a file of `precompile(...)` lines, as `julia --trace-compile=file`
+  writes while the program does the work that must be quick the first time.
+  The bundle compiles each line into its compile cache. Without it, the
+  first call of each method compiles it, each time the program starts. A
+  line that no longer names a method is skipped, so an old file does no harm.
 
 A module that only included files use waits to start (run its `__init__`)
 until one of them first `@use`s it, as under Kip. This covers files in
@@ -63,7 +69,8 @@ function bundle(entry::AbstractString, dir::AbstractString;
                 name::AbstractString=bundle_name(entry),
                 includes=String[],
                 files=String[],
-                precompile::Bool=true)
+                precompile::Bool=true,
+                warm::Union{Nothing,AbstractString}=nothing)
   entry = realpath(first(complete(entry)))
   deps, lazy, table, unbundled, packages = bundle_graph(entry, included_files(includes))
   pkgs = bundle_packages([deps; unbundled], table, project)
@@ -71,6 +78,9 @@ function bundle(entry::AbstractString, dir::AbstractString;
   extra = map(f -> realpath(isabspath(f) ? f : joinpath(dirname(entry), f)), files)
   root = copy_files(joinpath(dir, "files"), entry, [entry; deps; unbundled], packages, extra)
   write(joinpath(dir, "bundle.jl"), bundle_source(entry, deps, lazy, table, name, precompile, root))
+  # bundle.jl reads warm.jl if it's there, so an old one mustn't stay
+  rm(joinpath(dir, "warm.jl"), force=true)
+  warm === nothing || cp(warm, joinpath(dir, "warm.jl"))
   write(joinpath(dir, "juliac.jl"), """
     # JuliaC compiles this file into an app. It loads the bundle, a package with
     # a compile cache, and runs the entry script, which defines `main`.
@@ -504,6 +514,16 @@ function script()
     isdefined(Base, :should_use_main_entrypoint) && Base.should_use_main_entrypoint() || return 0
     ret = Main.main(ARGS)
     ret === nothing ? 0 : Cint(ret)
+  end
+end
+
+# Where warm.jl's lines are read: `Kip.warm` gives it a name for each module that's loaded
+module Warm end
+# While Julia precompiles the bundle, compile what warm.jl lists too, so the compile cache has it
+let file = joinpath(@__DIR__, "warm.jl")
+  if isfile(file)
+    include_dependency(file)
+    Kip.precompiling() && Kip.warm(Warm, file)
   end
 end"""
 

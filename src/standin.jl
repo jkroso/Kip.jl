@@ -66,6 +66,72 @@ function find_bundled(file::String, path::String)
   nothing
 end
 
+"`user/repo/commit/file` for a file of a commit that Kip keeps a copy of, or nothing for any other file"
+commit_key(path::String) = begin
+  m = match(r"/refs/([^/]+)/([^/]+)/([0-9a-f]{40})/(.+)$", path)
+  m === nothing ? nothing : join(m.captures, '/')
+end
+
+"The modules of the program that loads the bundle, each by its commit_key: those that Kip included there and made root modules"
+host_modules() = begin
+  out = Dict{String,Module}()
+  kip = get(Base.loaded_modules, Base.PkgId(Base.UUID("c32b5c58-9bcc-11e8-1f8b-492a5c8a885c"), "Kip"), nothing)
+  (kip === nothing || !isdefined(kip, :modules)) && return out
+  for (path, m) in kip.modules
+    parentmodule(m) === m || continue
+    k = commit_key(path)
+    k === nothing || (out[k] = m)
+  end
+  out
+end
+
+"""
+The module that the program which loads the bundle has already for sources[i],
+or nothing. It's the program's module only if the file, and every file it
+needs, is a file of the same commit there. The bundle then uses that module
+and doesn't define one of its own, so the program has one copy of a library
+that both use. Two copies can't both add the same method to a function of
+Julia's, and a value of one copy's type isn't a value of the other's.
+
+A program has such modules when its image was built with KIP_FROZEN, as an
+app's is, and it then loads a bundle as a plug-in.
+"""
+hosted(i::Int) = begin
+  key = commit_key(sources[i][2])
+  key === nothing && return nothing
+  host = host_modules()
+  haskey(host, key) || return nothing
+  all(j -> (k = commit_key(sources[j][2]); k !== nothing && haskey(host, k)), needs(i)) ? host[key] : nothing
+end
+
+"""
+Compile each `precompile(...)` line of the file at `path`, into the bundle's
+compile cache. The file is what `julia --trace-compile=path` writes while the
+program does the work that must be quick the first time: each line names a
+method and the types it was called with. Julia can't know those from the
+source alone, so without the file the first call compiles them, each time the
+program starts.
+
+A line names a module from the top: `Base`, a package, or the bundle. `names`
+is a module to read the lines in, the bundle's `Warm`: it's given a name for
+each module that's loaded. A line that names something this program hasn't,
+like a method that has since changed, is skipped. Returns how many lines it
+compiled and how many it skipped.
+"""
+function warm(names::Module, path::String)
+  for m in [collect(values(Base.loaded_modules)); bundle[]]
+    n = nameof(m)
+    isdefined(names, n) || Core.eval(names, :(const $n = $m))
+  end
+  compiled = skipped = 0
+  for line in eachline(path)
+    startswith(line, "precompile(") || continue
+    ok = try Core.eval(names, Meta.parse(line)) === true catch; false end
+    ok ? (compiled += 1) : (skipped += 1)
+  end
+  compiled, skipped
+end
+
 # The modules `define` is making
 const defining = Set{Int}()
 
@@ -78,6 +144,14 @@ function define(i::Int)
   m = loaded[i]
   m === nothing || return m
   name, path, src, lazy = sources[i]
+  m = hosted(i)
+  if m !== nothing
+    loaded[i] = m
+    sources[i] = (name, path, "", lazy)
+    # The bundle names the program's module as it would name its own
+    isdefined(bundle[], name) || Core.eval(bundle[], :(const $name = $m))
+    return modules[path] = m
+  end
   i in defining && error("$path @uses itself as it loads")
   push!(defining, i)
   try

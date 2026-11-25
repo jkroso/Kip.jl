@@ -99,6 +99,20 @@ run_bundle(file, args...) =
     end
   end
 
+  @testset "a warm file's lines go into the compile cache, and a line that names nothing is skipped" begin
+    trace = joinpath(mktempdir(), "trace.jl")
+    write(trace, "# what the program compiled\nprecompile(Tuple{typeof(Base.sum), Array{Int64, 1}})\nprecompile(Tuple{typeof(Main.gone), Int64})\n")
+    warm_dir = mktempdir()
+    warm_file = Kip.bundle(joinpath(app, "main.jl"), warm_dir; warm=trace)
+    @test read(joinpath(warm_dir, "warm.jl"), String) == read(trace, String)
+    out, err, code = run_bundle(warm_file, "a", "b")
+    @test code == 3
+    @test !occursin("ERROR", err)
+    # A bundle that's made again with no warm file has none
+    Kip.bundle(joinpath(app, "main.jl"), warm_dir)
+    @test !isfile(joinpath(warm_dir, "warm.jl"))
+  end
+
   @testset "precompile=false" begin
     dir = Kip.bundle(joinpath(app, "main.jl"), mktempdir(); project, precompile=false) |> dirname
     @test occursin("__precompile__(false)", read(joinpath(dir, "bundle.jl"), String))
