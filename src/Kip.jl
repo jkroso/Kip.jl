@@ -421,7 +421,7 @@ eval_module(path) = Base.include(get_module(path), path)
 
 function get_module(path, name=pkgname(path); interactive=false)
   get!(modules, path) do
-    mod = Module(module_name(path, name))
+    mod = Module(free_name(module_name(path, name), path))
     Core.eval(mod, Expr(:toplevel,
                         :(using Kip),
                         interactive ? :(using InteractiveUtils) : nothing,
@@ -430,6 +430,51 @@ function get_module(path, name=pkgname(path); interactive=false)
                         :(include(path) = Base.include($mod, path))))
     mod
   end
+end
+
+"""
+`name`, or a longer form of it when another module that's loaded has that name
+already: two files of one package with the same name, like `sketch.jl` and
+`cad/sketch.jl`, would both be `L/sketch`. The longer form has the file's
+folders, as many as it takes: `L/cad/sketch`.
+
+Julia finds a module that a compiled cache needs by its name. With two
+modules of one name it finds one of them, and refuses each cache that needs
+the other.
+"""
+function free_name(name::Symbol, path::AbstractString)
+  # A module is in Julia's table once its file has loaded, and in Kip's own from the start
+  taken(n) = haskey(Base.loaded_modules, Base.PkgId(nothing, String(n))) || any(m -> nameof(m) === n, values(modules))
+  taken(name) || return name
+  text = String(name)
+  i = findlast('/', text)
+  head = i === nothing ? text * "/" : text[1:i]
+  parts = splitpath(first(splitext(path)))
+  for n in 2:length(parts)
+    longer = Symbol(head, join(parts[end-n+1:end], '/'))
+    taken(longer) || return longer
+  end
+  Symbol(head, first(splitext(path)))
+end
+
+"""
+Make `mod`, a module that a file was included into, a root module as Julia
+means it: a module that is its own parent, in the table that Julia finds a
+cache's needed modules in. `Module(name)` gives it Main for a parent.
+
+It matters in a program whose image holds such modules, like an app that
+was built with KIP_FROZEN. When that program compiles a cache of a package,
+the cache lists every root module of the program by name, and the program
+loads the cache only if it finds each of them by that name.
+"""
+function make_root!(mod::Module)
+  parentmodule(mod) === mod || ccall(:jl_set_module_parent, Cvoid, (Any, Any), mod, mod)
+  Base.register_root_module(mod)
+  isdefined(Base, :loaded_precompiles) && @lock Base.require_lock begin
+    mods = get!(Vector{Module}, Base.loaded_precompiles, Base.PkgId(mod))
+    mod in mods || push!(mods, mod)
+  end
+  mod
 end
 
 "Generate a deterministic UUID from a content hash string"
@@ -1405,9 +1450,11 @@ function load_module(path)
       isdefined(mod, :__init__) && mod.__init__()
     end
     push!(fallback_paths, path)
+    make_root!(mod)
+  else
+    Base.register_root_module(mod)
   end
   modules[path] = mod
-  Base.register_root_module(mod)
   mod
 end
 
